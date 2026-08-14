@@ -77,8 +77,17 @@ let
           url = "https://raw.githubusercontent.com/bitcoin/bitcoin/d6cde007db9d3e6ee93bd98a9bbfdce9bfa9b15b/share/rpcauth/rpcauth.py";
           sha256 = "189mpplam6yzizssrgiyv70c9899ggh8cac76j4n7v0xqzfip07n";
         };
+        # rpcauth.py takes the password as an argv element, which is
+        # world-readable via /proc/<pid>/cmdline while the process runs
+        # (audit L-6). Pass it via file instead.
         rpcauth = pkgs.writers.writeBash "rpcauth" ''
-          exec ${pkgs.python3}/bin/python ${rpcauthSrc} "$@"
+          exec ${pkgs.python3}/bin/python -c '
+          import runpy, sys
+          with open(sys.argv[2]) as f:
+              password = f.read().strip()
+          sys.argv = ["rpcauth.py", sys.argv[1], password]
+          runpy.run_path("${rpcauthSrc}", run_name="__main__")
+          ' "$@"
         '';
       # Writes secrets to PWD
       in pkgs.writers.writeBash "generate-secrets" ''
@@ -96,7 +105,7 @@ let
           HMACfile=bitcoin-HMAC-$user
           makePasswordSecret "$file"
           if [[ $file -nt $HMACfile ]]; then
-            ${rpcauth} $user $(cat "$file") | grep rpcauth | cut -d ':' -f 2 > "$HMACfile"
+            ${rpcauth} "$user" "$file" | grep rpcauth | cut -d ':' -f 2 > "$HMACfile"
           fi
         }
         makeCert() {
@@ -211,7 +220,7 @@ in {
         processedFiles=()
         ${
           concatStrings (mapAttrsToList (n: v: ''
-            setupSecret ${n} ${v.user} ${v.group} ${v.permissions}
+            setupSecret ${escapeShellArg n} ${escapeShellArg v.user} ${escapeShellArg v.group} ${escapeShellArg v.permissions}
           '') cfg.secrets)
         }
 

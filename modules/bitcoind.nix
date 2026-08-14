@@ -372,7 +372,8 @@ in {
         };
         rpc.users.public = {
           passwordHMACFromFile = true;
-          rpcwhitelist = import ./bitcoind-rpc-public-whitelist.nix;
+          # mkDefault so users can extend/replace the whitelist in their own config
+          rpcwhitelist = mkDefault (import ./bitcoind-rpc-public-whitelist.nix);
         };
       }
     ];
@@ -432,6 +433,9 @@ in {
 
       # Enable RPC access for group
       postStart = ''
+        # NOTE: this makes the RPC cookie readable by group `bitcoin` — every
+        # service in that group gets full privileged RPC. Keep group membership
+        # minimal; new services should use an rpc user + HMAC instead (audit L-10).
         chmod g=r '${cfg.dataDir}/${optionalString cfg.regtest "regtest/"}.cookie'
       '' + (optionalString cfg.regtest) ''
         chmod g=x '${cfg.dataDir}/regtest'

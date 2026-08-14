@@ -124,20 +124,16 @@ in {
         after = wants;
       };
 
-      # HACK: Modify start/stop scripts of the peer setup service to read
-      # the pubkey from a secrets file.
-      wireguard-wg-nb-peer-peer0 = let
-        getPubkeyFromFile = mkBefore ''
-          if [[ ! -v inPatchedSrc ]]; then
-            export inPatchedSrc=1
-            publicKey=$(cat "${secretsDir}/wg-peer-public-key")
-            <"''${BASH_SOURCE[0]}" sed "s|\bpeer0\b|$publicKey|g" | ${pkgs.bash}/bin/bash -s
-            exit
-          fi
+      # Read the peer pubkey from the secrets file at service runtime.
+      # (Upstream patched its own source with sed and re-executed it as root,
+      # which turned a secrets-store write into root RCE; audit L-8.)
+      wireguard-wg-nb-peer-peer0 = {
+        script = mkForce ''
+          ${pkgs.wireguard-tools}/bin/wg set wg-nb peer "$(cat "${secretsDir}/wg-peer-public-key")" allowed-ips ${peerAddress}/32
         '';
-      in {
-        script = getPubkeyFromFile;
-        postStop = getPubkeyFromFile;
+        postStop = mkForce ''
+          ${pkgs.wireguard-tools}/bin/wg set wg-nb peer "$(cat "${secretsDir}/wg-peer-public-key")" remove || true
+        '';
       };
     };
 

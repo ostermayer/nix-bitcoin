@@ -15,7 +15,14 @@ in {
 
   systemd.services.bitcoind = {
     preStart = lib.mkAfter ''
-      echo "rpcpassword=$(cat ${secretsDir}/bitcoin-rpcpassword-privileged)" >> '${cfg.dataDir}/bitcoin.conf'
+      # Rewrite, don't append: the old version added a duplicate line on every
+      # restart (audit L-11). The privileged RPC password must stay 0640
+      # (owner bitcoin, group bitcoin) so the operator can read it for
+      # bitcoin-cli, but not world-readable.
+      conf='${cfg.dataDir}/bitcoin.conf'
+      ${pkgs.gnused}/bin/sed -i '/^rpcpassword=/d' "$conf"
+      echo "rpcpassword=$(cat ${secretsDir}/bitcoin-rpcpassword-privileged)" >> "$conf"
+      chmod 0640 "$conf"
     '';
     postStart = lib.mkForce "";
     serviceConfig = {

@@ -20,6 +20,14 @@ let
             # Print URL
             lndconnect --url
           ```
+
+          The lnd REST server stays on its configured `restAddress`
+          (default: localhost). To pair a client over the local network,
+          either set `services.lnd.lndconnect.onion = true` (recommended),
+          tunnel the port over SSH (`ssh -L 8080:localhost:8080`), or — if
+          you really want LAN exposure — set `services.lnd.restAddress`
+          yourself. Enabling lndconnect never changes the listen address
+          implicitly.
         '';
       };
       onion = mkOption {
@@ -101,7 +109,10 @@ in {
             }
           )];
 
-          services.lnd.restAddress = mkIf (!lnd.lndconnect.onion) "0.0.0.0";
+          # Deliberately NOT setting services.lnd.restAddress here.
+          # Upstream forced it to 0.0.0.0 when lndconnect was enabled without
+          # onion, which silently exposed the macaroon-admin REST API on all
+          # interfaces. Exposure must be an explicit user choice (audit M-2).
         }
 
         (mkIf lnd.lndconnect.onion {
