@@ -59,6 +59,19 @@ audit is re-run on every nixpkgs pin update.
 
 ## Release Integrity
 
-Merge and release commits are signed by the maintainers. `bitcoind` source
-tarballs are verified against the Bitcoin Core `guix.sigs` keyring at build
-time. Verify releases with `helper/fetch-release` before deploying.
+Commits and tags on this fork are signed with the maintainer's SSH key.
+GitHub shows verified commits as "Verified"; to verify locally, add the
+maintainer's public signing key to an SSH allowed-signers file and run
+`git log --show-signature` or `git verify-commit <rev>`.
+
+Because this fork is consumed as a flake input, integrity ultimately comes
+from your `flake.lock`: it records the exact commit and its content hash
+(`narHash`), and Nix refuses any input whose contents do not match. Pin a
+specific revision and review changes before advancing it.
+
+`bitcoind` source tarballs are additionally verified against the Bitcoin
+Core `guix.sigs` keyring at build time.
+
+Note: the upstream tarball-release helpers (`helper/push-release.sh`,
+`helper/fetch-release`) are not used by this fork and still reference the
+original maintainer's GPG key. Do not rely on them.
