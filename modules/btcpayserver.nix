@@ -110,6 +110,13 @@ in {
         rpcwhitelist = cfg.bitcoind.rpc.users.public.rpcwhitelist ++ [
           "setban"
           "generatetoaddress"
+          # nbxplorer's Indexer.ConnectNode calls getpeerinfo on every connect
+          # to confirm it is whitelisted by the node; without it the indexer
+          # loops on "403 Forbidden". M-3 removed getpeerinfo from the *public*
+          # whitelist (topology leak over the public proxy) — nbxplorer is an
+          # internal, authenticated user, so grant it here rather than widening
+          # the public set.
+          "getpeerinfo"
         ];
       };
       listenWhitelisted = true;
