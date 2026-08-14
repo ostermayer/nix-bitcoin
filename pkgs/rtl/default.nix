@@ -13,7 +13,7 @@ let self = stdenvNoCC.mkDerivation {
 
   src = fetchurl {
     url = "https://github.com/Ride-The-Lightning/RTL/archive/refs/tags/v${self.version}.tar.gz";
-    hash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+    hash = "sha256-9q8SH0Ze1lPiuRT0D7Ibo40Ko/zZATIzeSS7YgXIGC8=";
   };
 
   passthru = {

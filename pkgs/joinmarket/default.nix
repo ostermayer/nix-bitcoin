@@ -10,7 +10,7 @@ let
     owner = "joinmarket-org";
     repo = "joinmarket-clientserver";
     rev = "v${version}";
-    hash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+    hash = "sha256-T0+WXFtXCzBCNRF8DdTQcZQajoZuSuUJA1vUJBfDp6E=";
   };
 
   runtimePackages = with nbPython3PackagesJoinmarket; [

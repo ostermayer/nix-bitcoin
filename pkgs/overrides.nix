@@ -23,7 +23,7 @@ in
     version = "0.16.2";
     src = pkgs.fetchzip {
       url = "https://github.com/ZmnSCPxj/clboss/releases/download/v${version}/clboss-v${version}.tar.gz";
-      hash = fakeHash;
+      hash = "sha256-I83OH+31oqx2FSjzEIsz7uOko3/MbUqjrZ+xZTXxtto=";
     };
   }) else pkgsUnstable.clboss;
 
@@ -34,7 +34,7 @@ in
     version = "26.06.6";
     src = pkgs.fetchurl {
       url = "https://github.com/ElementsProject/lightning/releases/download/v${version}/clightning-v${version}.zip";
-      hash = fakeHash;
+      hash = "sha256-ZuA1QAhau10UU7pKa81U9/1ebfrXznGtcZpk3l9S8sQ=";
     };
   }) else pkgs.clightning;
 
@@ -45,7 +45,7 @@ in
       owner = "lightninglabs";
       repo = "loop";
       rev = "v${version}";
-      hash = fakeHash;
+      hash = "sha256-PR5LUqeN1f1XpL9woAZV4foimtFILyZsRKVfhLBf+fQ=";
     };
     vendorHash = fakeHash;
   }) else pkgsUnstable.lightning-loop;
