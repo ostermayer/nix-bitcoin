@@ -17,7 +17,8 @@ in
 let self = {
   clightning-rest = pkgs.callPackage ./clightning-rest { inherit (self) fetchNodeModules; };
   clightning-plugins = pkgs.lib.recurseIntoAttrs (import ./clightning-plugins pkgs self.nbPython3Packages);
-  clnrest = pkgs.callPackage ./clnrest { inherit (self.pinned) clightning; };
+  # clnrest builds from the clightning source; use the effective (possibly overridden) version
+  clnrest = pkgs.callPackage ./clnrest { inherit (self.modulesPkgs) clightning; };
   joinmarket = pkgs.callPackage ./joinmarket { inherit (self) nbPython3PackagesJoinmarket; };
   lndinit = pkgs.callPackage ./lndinit { };
   liquid-swap = pkgs.python3Packages.callPackage ./liquid-swap { };
@@ -50,5 +51,8 @@ let self = {
 
   pinned = import ./pinned.nix pkgs pkgsUnstable pkgs-25_05;
 
-  modulesPkgs = self // self.pinned;
+  # Security version overrides (see overrides.nix). Precedence: overrides > self > pinned.
+  overrides = import ./overrides.nix { inherit pkgs pkgsUnstable; };
+
+  modulesPkgs = self.pinned // self // self.overrides;
 }; in self

@@ -2,7 +2,8 @@ nbPkgs: python3:
 rec {
   pyPkgsOverrides = self: super: let
     inherit (self) callPackage;
-    clightningPkg = pkg: callPackage pkg { inherit (nbPkgs.pinned) clightning; };
+    # pyln-* are built from the clightning source; use the effective (possibly overridden) version
+    clightningPkg = pkg: callPackage pkg { inherit (nbPkgs.modulesPkgs) clightning; };
   in
     {
       txzmq = callPackage ./txzmq {};
