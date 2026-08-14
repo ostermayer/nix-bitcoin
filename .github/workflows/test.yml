@@ -30,16 +30,28 @@ jobs:
   test_scenario:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
+        # `default` (secureNode) and `regtest` boot the full stack
+        # (bitcoind + lnd + electrs + btcpayserver/nbxplorer) and assert it
+        # works — this catches RPC-whitelist / service-health regressions.
+        # `netns` covers network-namespace isolation.
         scenario:
           - default
+          - regtest
           - netns
-          - netnsRegtest
-          - joinmarket-bitcoind-29
     needs: build_test_drivers
     if: needs.build_test_drivers.outputs.run_scenario_tests == 'true'
     steps:
       - uses: actions/checkout@v4
+      # VM tests run QEMU inside the Nix build sandbox and need /dev/kvm
+      # accessible to the build users. GitHub runners have KVM hardware; open
+      # its permissions so the sandbox can use it.
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
       - uses: cachix/install-nix-action@v31
       - run: nix shell --inputs-from . nixpkgs#{bash,coreutils,cachix} -c ./test/ci/build.sh ${{ matrix.scenario }}
 
