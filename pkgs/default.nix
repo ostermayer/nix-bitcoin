@@ -30,5 +30,8 @@ let self = {
 
   pinned = import ./pinned.nix pkgs pkgsUnstable pkgs-25_05;
 
-  modulesPkgs = self // self.pinned;
+  # Security version overrides (see overrides.nix). Precedence: overrides > self > pinned.
+  overrides = import ./overrides.nix { inherit pkgs pkgsUnstable; };
+
+  modulesPkgs = self.pinned // self // self.overrides;
 }; in self
