@@ -114,11 +114,6 @@ nix-bitcoin aims to achieve a high degree of security by building on the followi
 
 Note that if the machine you're deploying *from* is insecure, there is nothing nix-bitcoin can do to protect itself.
 
-Security fund
----
-The nix-bitcoin security fund is a 2 of 3 bitcoin multisig address open for donations, used to reward
-security researchers who discover vulnerabilities in nix-bitcoin or its upstream dependencies.\
-See [Security Fund](./SECURITY.md#nix-bitcoin-security-fund) for details.
 
 Developing
 ---
