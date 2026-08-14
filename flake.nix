@@ -21,10 +21,6 @@
       supportedSystems = [
         "x86_64-linux"
         "aarch64-linux"
-        # On these 32-bit platforms, Python pkg `pymemcache` 4.0.0 (required by
-        # `joinmarket`) is broken:
-        # "i686-linux"
-        # "armv7l-linux"
       ];
 
       test = import ./test/tests.nix nixpkgs.lib self.nixosModules.default;
@@ -97,8 +93,6 @@
           "nixops19_09"
           "pinned"
           "generate-secrets"
-          "nbPython3Packages"
-          "nbPython3PackagesJoinmarket"
         ]) // {
           inherit (import ./examples/qemu-vm/minimal-vm.nix self pkgs system)
             # A simple demo VM.

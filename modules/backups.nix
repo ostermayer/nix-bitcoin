@@ -61,19 +61,10 @@ let
       - ${config.services.bitcoind.dataDir}/indexes
     ''}
     ${config.services.bitcoind.dataDir}
-    ${config.services.clightning.dataDir}
-    ${config.services.clightning-rest.dataDir}
     ${config.services.lnd.dataDir}
-    ${optionalString (!cfg.with-bulk-data) ''
-      - ${config.services.liquidd.dataDir}/*/blocks
-      - ${config.services.liquidd.dataDir}/*/chainstate
-      - ${config.services.liquidd.dataDir}/*/indexes
-    ''}
-    ${config.services.liquidd.dataDir}
     ${optionalString cfg.with-bulk-data "${config.services.electrs.dataDir}"}
     ${config.services.nbxplorer.dataDir}
     ${config.services.btcpayserver.dataDir}
-    ${config.services.joinmarket.dataDir}
     ${optionalString config.nix-bitcoin.generateSecrets "${config.nix-bitcoin.secretsDir}"}
     /var/lib/tor
     /var/lib/nixos

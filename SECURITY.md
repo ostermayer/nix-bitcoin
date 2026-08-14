@@ -38,8 +38,8 @@ In scope:
 
 Out of scope:
 
-- Vulnerabilities in the daemons we package (bitcoind, clightning, lnd,
-  electrs, btcpayserver, joinmarket, ...). Report those to the upstream
+- Vulnerabilities in the daemons we package (bitcoind, lnd,
+  electrs, btcpayserver, nbxplorer, ...). Report those to the upstream
   project first. If upstream has shipped a fix that we have not yet pulled in,
   tell us and we will treat it as urgent.
 - Attacks requiring physical access or an already-compromised deployment

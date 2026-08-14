@@ -61,7 +61,7 @@ enter_service() {
     IFS=- read -r uid gid  < <(stat -c "%u-%g" "/proc/$pid")
     nsenter --all -t "$pid" --setuid "$uid" --setgid "$gid" bash
 }
-enter_service clightning
+enter_service lnd
 
 #―――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――
 # bitcoind
@@ -91,43 +91,6 @@ run-tests.sh -s "{
 }" container --run c journalctl -u bitcoind -f
 
 #―――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――
-# clightning
-run-tests.sh -s clightning container
-
-c systemctl status clightning
-c journalctl --output=short-precise -u clightning
-c lightning-cli getinfo
-
-# Plugins
-run-tests.sh -s "{
-  services.clightning.enable = true;
-  test.features.clightningPlugins = true;
-}" container
-
-c lightning-cli plugin list
-
-# Show plugin config
-nix eval --raw .#makeTest --apply '
-  makeTest: let
-   config = (makeTest {
-      config = {
-        services.clightning.enable = true;
-        test.features.clightningPlugins = true;
-      };
-    }).nodes.machine;
-  in
-    config.services.clightning.extraConfig
-'
-
-#―――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――
-# clightning-rest
-run-tests.sh -s clightning-rest container
-
-c systemctl status clightning-rest
-c journalctl -u clightning-rest
-c systemctl status clightning-rest-migrate-datadir
-
-#―――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――
 # electrs
 
 run-tests.sh -s "{
@@ -146,35 +109,11 @@ electrs_rpc '{"method": "server.version", "id": 0, "params": ["electrum/3.3.8", 
 electrs_rpc '{"method": "blockchain.headers.subscribe", "id": 0}'
 
 #―――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――
-# fulcrum
-
-run-tests.sh -s "{
-  imports = [ scenarios.regtestBase ];
-  services.fulcrum.enable = true;
-}" container
-
-c systemctl status fulcrum
-c systemctl cat fulcrum
-c journalctl --output=short-precise -u fulcrum
-
-fulcrum_rpc() {
-    echo "$1" | c nc 127.0.0.1 50002 | head -1 | jq
-}
-fulcrum_rpc '{"method": "server.version", "id": 0, "params": ["electrum/3.3.8", "1.4"]}'
-fulcrum_rpc '{"method": "blockchain.headers.subscribe", "id": 0}'
-
-#―――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――
 # lnd
 run-tests.sh -s lnd container
 c systemctl status lnd
 c journalctl -u lnd
 c lncli getinfo
-
-#―――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――
-# lightning-loop
-run-tests.sh -s lightning-loop container
-c systemctl status lightning-loop
-c journalctl -u lightning-loop
 
 #―――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――
 # btcpayserver
@@ -234,87 +173,9 @@ post stores/$store/lightning/BTC/setup "" --data-raw 'LightningNodeType=Internal
 nix run --inputs-from . nixpkgs#lynx -- --dump http://$ip:23000/embed/$store/BTC/ln
 
 #―――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――
-# liquid
-run-tests.sh -s liquid container
-
-c systemctl status liquidd
-c elements-cli getpeerinfo
-c elements-cli getnetworkinfo
-c liquidswap-cli --help
-
-#―――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――
 # tor
 run-tests.sh container
 
 c cat /var/lib/tor/state
 c ls -al /var/lib/tor/onion/
 c ls -al /var/lib/tor/onion/bitcoind
-c ls -al /var/lib/tor/onion/clightning-rest
-
-#―――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――
-# joinmarket
-run-tests.sh -s joinmarket container
-
-c systemctl status joinmarket
-c journalctl -u joinmarket
-
-#―――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――
-# joinmarket-ob-watcher
-
-# This starts a container with WAN access, so that jm-ob-watcher
-# can connect to the joinmarket IRC servers over Tor
-run-tests.sh -s jm-ob-watcher container
-
-c systemctl status joinmarket-ob-watcher
-c journalctl -u joinmarket-ob-watcher
-
-# Manually wait for string 'started http server, visit http://127.0.0.1:62601/'
-# This can take >10 minutes when the Tor network is under heavy load.
-# While connecting, errors like `We failed to connect and handshake with ANY directories...`
-# may be shown.
-c journalctl -f -u joinmarket-ob-watcher
-
-# Check webinterface
-c curl 127.0.0.1:62601
-nix run --inputs-from . nixpkgs#lynx -- --dump $ip:62601
-c curl -s 127.0.0.1:62601 | grep -i "orders found"
-
-#―――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――
-# trustedcoin
-run-tests.sh -s trustedcoin-online container
-
-c systemctl start clightning
-c journalctl -u clightning -f
-# This should show log msgs like
-# plugin-trustedcoin returning block 801409, 0000000000000000000482ddc4…, 1483968 bytes
-
-#―――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――
-# mempool
-run-tests.sh -s mempool-regtest container
-
-c systemctl status mempool
-c journalctl -u mempool
-c systemctl status mysql
-c nodeinfo
-
-# Check backend
-c curl -fsS localhost:8999/api/v1/blocks/1 | jq
-c curl -fsS localhost:8999/api/v1/blocks/tip/height | jq
-c curl -fsS localhost:8999/api/v1/address/1CGG9qVq2P6F7fo6sZExvNq99Jv2GDpaLE | jq
-
-# Check frontend
-c systemctl status nginx
-c journalctl -u nginx
-c curl -fsS localhost:60845
-c curl -fsS localhost:60845/api/mempool | jq
-c curl -fsS localhost:60845/api/blocks/1 | jq
-c curl -fsS localhost:60845/api/v1/blocks/1 | jq
-c curl -fsS localhost:60845/api/blocks/tip/height | jq
-
-# Open frontend
-# shellcheck disable=SC2154
-runuser -u "$(logname)" -- xdg-open "http://$ip:60845/"
-
-#―――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――
-# rtl
-# see ./topics/rtl.sh

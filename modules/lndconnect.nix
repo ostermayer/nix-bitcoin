@@ -32,64 +32,6 @@ let
       };
     };
 
-    services.clightning.plugins.clnrest.lnconnect = {
-      enable = mkOption {
-        type = types.bool;
-        default = false;
-        description = ''
-          Add a `lnconnect-clnrest` binary to the system environment which prints
-          connection info for clightning clients.
-          See: https://github.com/LN-Zap/lndconnect
-
-          Usage:
-          ```bash
-            # Print QR code
-            lnconnect-clnrest
-
-            # Print URL
-            lnconnect-clnrest --url
-          ```
-        '';
-      };
-      onion = mkOption {
-        type = types.bool;
-        default = false;
-        description = ''
-          Create an onion service for the clnrest server,
-          which is used by lnconnect.
-        '';
-      };
-    };
-
-    services.clightning-rest.lndconnect = {
-      enable = mkOption {
-        type = types.bool;
-        default = false;
-        description = ''
-        Add a `lndconnect-clightning` binary to the system environment which prints
-        connection info for clightning clients.
-        See: https://github.com/LN-Zap/lndconnect
-
-        Usage:
-        ```bash
-          # Print QR code
-          lndconnect-clightning
-
-          # Print URL
-          lndconnect-clightning --url
-        ```
-      '';
-      };
-      onion = mkOption {
-        type = types.bool;
-        default = false;
-        description = ''
-          Create an onion service for the clightning REST server,
-          which is used by lndconnect.
-        '';
-      };
-    };
-
     nix-bitcoin.mkLndconnect = mkOption {
       readOnly = true;
       default = mkLndconnect;
@@ -103,18 +45,11 @@ let
   nbLib = config.nix-bitcoin.lib;
   runAsUser = config.nix-bitcoin.runAsUserCmd;
 
-  inherit (config.services)
-    lnd
-    clightning
-    clightning-rest;
-
-  inherit (clightning.plugins) clnrest;
+  inherit (config.services) lnd;
 
   mkLndconnect = {
     name,
     shebang ? "#!${pkgs.stdenv.shell} -e",
-    isClightning ? false,
-    isClnrest ? false,
     port,
     authSecretPath,
     enableOnion,
@@ -134,34 +69,6 @@ let
         --adminmacaroonpath='${authSecretPath}' \
         --configfile=/dev/null "$@"
     )
-
-    ${optionalString isClightning
-      # - Change URL procotcol to c-lightning-rest
-      # - Encode macaroon as hex (in uppercase) instead of base 64.
-      #   Because `macaroon` is always the last URL fragment, the
-      #   sed replacement below works correctly.
-      ''
-        macaroonHex=$(${getExe pkgs.xxd} -p -u -c 99999 '${authSecretPath}')
-        url=$(
-          echo "$url" | ${getExe pkgs.gnused} "
-            s|^lndconnect|c-lightning-rest|
-            s|macaroon=.*|macaroon=$macaroonHex|
-          ";
-        )
-      ''
-    }
-
-    ${optionalString isClnrest
-      # Change URL procotcol to clnrest
-      ''
-        url=$(
-          echo "$url" | ${getExe pkgs.gnused} "
-            s|^lndconnect|clnrest|
-            s|macaroon=.*|rune=$(cat '${authSecretPath}')|
-          ";
-        )
-      ''
-     }
 
     # If --url is in args
     if [[ " $* " =~ " --url " ]]; then
@@ -212,71 +119,5 @@ in {
           };
         })
       ]))
-
-    (mkIf (clnrest.enable && clnrest.lnconnect.enable)
-      (mkMerge [
-        {
-          environment.systemPackages = [(
-            mkLndconnect {
-              name = "lnconnect-clnrest";
-              isClnrest = true;
-              enableOnion = clnrest.lnconnect.onion;
-              onionService = "${operatorName}/clnrest";
-              port = clnrest.port;
-              certPath = "${clightning.networkDir}/client.pem";
-              authSecretPath = "${clightning.networkDir}/admin-rune";
-            }
-          )];
-
-          services.clightning.plugins.clnrest.address = mkIf (!clnrest.lnconnect.onion) "0.0.0.0";
-        }
-
-        (mkIf clnrest.lnconnect.onion {
-          services.tor = {
-            enable = true;
-            relay.onionServices.clnrest = nbLib.mkOnionService {
-              target.addr = nbLib.address clnrest.address;
-              target.port = clnrest.port;
-              port = clnrest.port;
-            };
-          };
-          # This also allows nodeinfo to show the clnrest onion address
-          nix-bitcoin.onionAddresses.access.${operatorName} = [ "clnrest" ];
-        })
-      ])
-    )
-
-    (mkIf (clightning-rest.enable && clightning-rest.lndconnect.enable)
-      (mkMerge [
-        {
-          environment.systemPackages = [(
-            mkLndconnect {
-              name = "lndconnect-clightning";
-              isClightning = true;
-              enableOnion = clightning-rest.lndconnect.onion;
-              onionService = "${operatorName}/clightning-rest";
-              port = clightning-rest.port;
-              certPath = "${clightning-rest.dataDir}/certs/certificate.pem";
-              authSecretPath = "${clightning-rest.dataDir}/certs/access.macaroon";
-            }
-          )];
-
-          # clightning-rest always binds to all interfaces
-        }
-
-        (mkIf clightning-rest.lndconnect.onion {
-          services.tor = {
-            enable = true;
-            relay.onionServices.clightning-rest = nbLib.mkOnionService {
-              target.addr = nbLib.address clightning-rest.address;
-              target.port = clightning-rest.port;
-              port = clightning-rest.port;
-            };
-          };
-          # This also allows nodeinfo to show the clightning-rest onion address
-          nix-bitcoin.onionAddresses.access.${operatorName} = [ "clightning-rest" ];
-        })
-      ])
-    )
   ];
 }

@@ -17,11 +17,8 @@ let
       };
       package = mkOption {
         type = types.package;
-        default = if cfg.btcpayserver.lbtc then
-                    config.nix-bitcoin.pkgs.btcpayserver.override { altcoinSupport = true; }
-                  else
-                    config.nix-bitcoin.pkgs.btcpayserver;
-        defaultText = "(See source)";
+        default = config.nix-bitcoin.pkgs.btcpayserver;
+        defaultText = "config.nix-bitcoin.pkgs.btcpayserver";
         description = "The package providing btcpayserver binaries.";
       };
       dataDir = mkOption {
@@ -30,14 +27,10 @@ let
         description = "The data directory for btcpayserver.";
       };
       lightningBackend = mkOption {
-        type = types.nullOr (types.enum [ "clightning" "lnd" ]);
+        # This fork removed the upstream clightning backend (trim 2026-08-14)
+        type = types.nullOr (types.enum [ "lnd" ]);
         default = null;
         description = "The lightning node implementation to use.";
-      };
-      lbtc = mkOption {
-        type = types.bool;
-        default = false;
-        description = "Enable liquid support in btcpayserver.";
       };
       rootpath = mkOption {
         type = types.nullOr types.str;
@@ -105,7 +98,7 @@ let
   cfg = config.services;
   nbLib = config.nix-bitcoin.lib;
 
-  inherit (config.services) bitcoind liquidd;
+  inherit (config.services) bitcoind;
 in {
   inherit options;
 
@@ -121,17 +114,12 @@ in {
       };
       listenWhitelisted = true;
     };
-    services.clightning.enable = mkIf (cfg.btcpayserver.lightningBackend == "clightning") true;
     services.lnd = mkIf (cfg.btcpayserver.lightningBackend == "lnd") {
       enable = true;
       macaroons.btcpayserver = {
         inherit (cfg.btcpayserver) user;
         permissions = ''{"entity":"info","action":"read"},{"entity":"onchain","action":"read"},{"entity":"offchain","action":"read"},{"entity":"address","action":"read"},{"entity":"message","action":"read"},{"entity":"peers","action":"read"},{"entity":"signer","action":"read"},{"entity":"invoices","action":"read"},{"entity":"invoices","action":"write"},{"entity":"address","action":"write"}'';
       };
-    };
-    services.liquidd = mkIf cfg.btcpayserver.lbtc {
-      enable = true;
-      listenWhitelisted = true;
     };
     services.postgresql = {
       enable = true;
@@ -164,26 +152,17 @@ in {
         btcnodeendpoint=${nbLib.addressWithPort bitcoind.address bitcoind.whitelistedPort}
         bind=${cfg.nbxplorer.address}
         port=${toString cfg.nbxplorer.port}
-        ${optionalString cfg.btcpayserver.lbtc ''
-          chains=btc,lbtc
-          lbtcrpcuser=${liquidd.rpcuser}
-          lbtcrpcurl=http://${nbLib.addressWithPort liquidd.rpc.address liquidd.rpc.port}
-          lbtcnodeendpoint=${nbLib.addressWithPort liquidd.address liquidd.whitelistedPort}
-        ''}
         postgres=User ID=${cfg.nbxplorer.user};Host=/run/postgresql;Database=nbxplorer
       '';
     in rec {
       wantedBy = [ "multi-user.target" ];
       requires = [ "postgresql.target" ];
-      wants = [ "bitcoind.service" ] ++ optional cfg.btcpayserver.lbtc "liquidd.service";
+      wants = [ "bitcoind.service" ];
       after = requires ++ wants ++ [ "nix-bitcoin-secrets.target" ];
       preStart = ''
         install -m 600 ${configFile} '${cfg.nbxplorer.dataDir}/settings.config'
         {
           echo "btcrpcpassword=$(cat ${config.nix-bitcoin.secretsDir}/bitcoin-rpcpassword-btcpayserver)"
-          ${optionalString cfg.btcpayserver.lbtc ''
-            echo "lbtcrpcpassword=$(cat ${config.nix-bitcoin.secretsDir}/liquid-rpcpassword)"
-          ''}
         } >> '${cfg.nbxplorer.dataDir}/settings.config'
       '';
       serviceConfig = nbLib.defaultHardening // {
@@ -212,8 +191,6 @@ in {
         postgres=User ID=${cfg.btcpayserver.user};Host=/run/postgresql;Database=btcpaydb
       '' + optionalString (cfg.btcpayserver.rootpath != null) ''
         rootpath=${cfg.btcpayserver.rootpath}
-      '' + optionalString (cfg.btcpayserver.lightningBackend == "clightning") ''
-        btclightning=type=clightning;server=unix:///${cfg.clightning.dataDir}/${bitcoind.makeNetworkName "bitcoin" "regtest"}/lightning-rpc
       '' + optionalString (cfg.btcpayserver.lightningBackend == "lnd")
         (
           "btclightning=type=lnd-rest;" +
@@ -221,12 +198,7 @@ in {
           "macaroonfilepath=/run/lnd/btcpayserver.macaroon;" +
           "certfilepath=${config.services.lnd.certPath}" +
           "\n"
-        )
-      + optionalString cfg.btcpayserver.lbtc ''
-        chains=btc,lbtc
-        lbtcexplorerurl=${nbExplorerUrl}
-        lbtcexplorercookiefile=${nbExplorerCookie}
-      '');
+        ));
     in rec {
       wantedBy = [ "multi-user.target" ];
       requires = [ "postgresql.target" ];
@@ -259,16 +231,14 @@ in {
     users.users.${cfg.nbxplorer.user} = {
       isSystemUser = true;
       group = cfg.nbxplorer.group;
-      extraGroups = [ "bitcoinrpc-public" ]
-                    ++ optional cfg.btcpayserver.lbtc liquidd.group;
+      extraGroups = [ "bitcoinrpc-public" ];
       home = cfg.nbxplorer.dataDir;
     };
     users.groups.${cfg.nbxplorer.group} = {};
     users.users.${cfg.btcpayserver.user} = {
       isSystemUser = true;
       group = cfg.btcpayserver.group;
-      extraGroups = [ cfg.nbxplorer.group ]
-                    ++ optional (cfg.btcpayserver.lightningBackend == "clightning") cfg.clightning.user;
+      extraGroups = [ cfg.nbxplorer.group ];
       home = cfg.btcpayserver.dataDir;
     };
     users.groups.${cfg.btcpayserver.group} = {};

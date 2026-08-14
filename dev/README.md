@@ -91,9 +91,10 @@ See also: [test/README.md](../test/README.md)
 
 It's easiest to use an existing service as a template:
 - [electrs.nix](../modules/electrs.nix): a basic service
-- [clightning.nix](../modules/clightning.nix): simple, but covers a few more features.\
-  (A `cli` binary and a runtime-composed config to include secrets.)
-- [rtl.nix](../modules/rtl.nix): includes a custom package, defined in [pkgs/rtl](../pkgs/rtl).\
+- [lnd.nix](../modules/lnd.nix): a more complex service with secrets, runtime-composed
+  config and a `cli` binary.
+- [btcpayserver.nix](../modules/btcpayserver.nix): includes a custom package, defined in
+  [pkgs/nbxplorer](../pkgs/nbxplorer).\
   Most other services use packages that are already included in nixpkgs.
 
 ## Switching to a new NixOS release

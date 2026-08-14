@@ -43,7 +43,7 @@ vmWaitForSSH
 printf "Waiting until services are ready"
 c "
 $(cat qemu-vm/wait-until.sh)
-waitUntil 'systemctl is-active clightning &> /dev/null' 100
+waitUntil 'systemctl is-active lnd &> /dev/null' 100
 "
 echo
 

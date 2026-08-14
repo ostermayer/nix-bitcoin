@@ -19,10 +19,6 @@ let
       }
     ];
 
-    options.test.features = {
-      clightningPlugins = mkEnableOption "all clightning plugins";
-    };
-
     config = mkMerge [{
       environment.systemPackages = mkMerge (with pkgs; [
         # Needed to test macaroon creation
@@ -37,59 +33,6 @@ let
         extraConfig = mkIf config.test.noConnections "connect=0";
       };
 
-      tests.clightning = cfg.clightning.enable;
-      test.data.clightning-replication = cfg.clightning.replication.enable;
-      tests.trustedcoin = cfg.clightning.plugins.trustedcoin.enable;
-
-      # TODO-EXTERNAL:
-      # When WAN is disabled, DNS bootstrapping slows down service startup by ~15 s.
-      services.clightning.extraConfig = ''
-        ${optionalString config.test.noConnections "disable-dns"}
-      '';
-      test.data.clightning-plugins = let
-        plugins = config.services.clightning.plugins;
-        removed = [
-          # Only defined via `obsolete-options.nix`
-          "commando"
-          "helpme"
-          "prometheus"
-          "summary"
-        ];
-        available = subtractLists removed (builtins.attrNames plugins);
-        enabled = builtins.filter (plugin: plugins.${plugin}.enable) available;
-        nbPkgs = config.nix-bitcoin.pkgs;
-        pluginPkgs = nbPkgs.clightning-plugins // {
-          clboss.path = "${plugins.clboss.package}/bin/clboss";
-          clnrest.path = "${plugins.clnrest.package}/bin/clnrest";
-          trustedcoin.path = "${plugins.trustedcoin.package}/bin/trustedcoin";
-        };
-      in map (plugin: pluginPkgs.${plugin}.path) enabled;
-
-      tests.clightning-rest = cfg.clightning-rest.enable;
-
-      tests.rtl = cfg.rtl.enable;
-      services.rtl = {
-        nodes = {
-          lnd = {
-            enable = mkDefault true;
-            loop = mkDefault true;
-            extraConfig.Settings.userPersona = "MERCHANT";
-          };
-          clightning.enable = mkDefault true;
-        };
-        extraCurrency = mkDefault "CHF";
-      };
-      # Use a simple, non-random password for manual web interface tests
-      nix-bitcoin.generateSecretsCmds.rtl = mkIf cfg.rtl.enable (mkForce ''
-        echo a > rtl-password
-      '');
-
-      tests.mempool = cfg.mempool.enable;
-      services.mempool = {
-        electrumServer = "fulcrum";
-        settings.MEMPOOL.POOLS_JSON_URL = mkIf config.test.noConnections "disable-pool-fetching";
-      };
-
       tests.lnd = cfg.lnd.enable;
       services.lnd = {
         port = 9736;
@@ -102,40 +45,12 @@ let
       nix-bitcoin.onionServices.lnd.public = true;
 
       tests.lndconnect-onion-lnd = with cfg.lnd.lndconnect; enable && onion;
-      tests.lnconnect-onion-clnrest = with cfg.clightning.plugins.clnrest.lnconnect; enable && onion;
-      tests.lndconnect-onion-clightning = with cfg.clightning-rest.lndconnect; enable && onion;
-
-      tests.lightning-loop = cfg.lightning-loop.enable;
-      services.lightning-loop.certificate.extraIPs = [ "20.0.0.1" ];
-
-      tests.lightning-pool = cfg.lightning-pool.enable;
-
-      tests.charge-lnd = cfg.charge-lnd.enable;
 
       tests.electrs = cfg.electrs.enable;
-
-      services.fulcrum.port = 50002;
-      tests.fulcrum = cfg.fulcrum.enable;
-
-      tests.liquidd = cfg.liquidd.enable;
-      services.liquidd.extraConfig = mkIf config.test.noConnections "connect=0";
 
       tests.btcpayserver = cfg.btcpayserver.enable;
       services.btcpayserver = {
         lightningBackend = mkDefault "lnd";
-        lbtc = mkDefault true;
-      };
-      test.data.btcpayserver-lbtc = config.services.btcpayserver.lbtc;
-
-      tests.joinmarket = cfg.joinmarket.enable;
-      tests.joinmarket-yieldgenerator = cfg.joinmarket.yieldgenerator.enable;
-      tests.joinmarket-ob-watcher = cfg.joinmarket-ob-watcher.enable;
-      services.joinmarket.yieldgenerator = {
-        enable = config.services.joinmarket.enable;
-        # Test a smattering of custom parameters
-        ordertype = "absoffer";
-        cjfee_a = 300;
-        cjfee_r = 0.00003;
       };
 
       tests.nodeinfo = config.nix-bitcoin.nodeinfo.enable;
@@ -150,32 +65,6 @@ let
       # Avoid timeout failures on slow CI nodes
       systemd.services.postgresql.serviceConfig.TimeoutStartSec = "5min";
     }
-    (mkIf config.services.clightning.plugins.clboss.enable {
-      # Torified 'dig' subprocesses of clboss don't respond to SIGTERM and keep
-      # running for a long time when WAN is disabled, which prevents clightning units
-      # from stopping quickly.
-      # Set TimeoutStopSec for faster stopping.
-      systemd.services.clightning.serviceConfig.TimeoutStopSec = "500ms";
-    })
-    (mkIf config.test.features.clightningPlugins {
-      services.clightning.plugins = {
-        clboss.enable = true;
-        feeadjuster.enable = true;
-        monitor.enable = true;
-        rebalance.enable = true;
-        zmq = let tcpEndpoint = "tcp://127.0.0.1:5501"; in {
-          enable = true;
-          channel-opened = tcpEndpoint;
-          connect = tcpEndpoint;
-          disconnect = tcpEndpoint;
-          invoice-payment = tcpEndpoint;
-          warning = tcpEndpoint;
-          forward-event = tcpEndpoint;
-          sendpay-success = tcpEndpoint;
-          sendpay-failure = tcpEndpoint;
-        };
-      };
-    })
     ];
   };
 
@@ -189,39 +78,13 @@ let
     full = {
       tests.security = true;
 
-      services.clightning.enable = true;
-      services.clightning.replication = {
-        enable = true;
-        encrypt = true;
-        local.directory = "/var/backup/clightning";
-      };
-      services.clightning.plugins.clnrest = {
-        enable = true;
-        lnconnect = { enable = true; onion = true; };
-      };
-      test.features.clightningPlugins = true;
-      services.rtl.enable = true;
-      services.clightning-rest.enable = true;
-      services.clightning-rest.lndconnect = { enable = true; onion = true; };
       services.lnd.enable = true;
       services.lnd.lndconnect = { enable = true; onion = true; };
-      services.lightning-loop.enable = true;
-      services.lightning-pool.enable = true;
-      services.charge-lnd.enable = true;
-      services.mempool.enable = true;
       services.electrs.enable = true;
-      services.fulcrum.enable = true;
-      services.liquidd.enable = true;
       services.btcpayserver.enable = true;
-      services.joinmarket-ob-watcher.enable = true;
       services.backups.enable = true;
 
       nix-bitcoin.nodeinfo.enable = true;
-
-      services.hardware-wallets = {
-        trezor = true;
-        ledger = true;
-      };
     };
 
     secureNode = {
@@ -231,8 +94,6 @@ let
       ];
       tests.secure-node = true;
       tests.restart-bitcoind = true;
-
-      nix-bitcoin.onionServices.mempool-frontend.enable = true;
 
       # Stop electrs from spamming the test log with 'WARN - wait until IBD is over' messages
       tests.stop-electrs = true;
@@ -247,18 +108,8 @@ let
     # All regtest-enabled services
     regtest = {
       imports = [ scenarios.regtestBase ];
-      services.clightning.enable = true;
-      test.features.clightningPlugins = true;
-      services.clightning-rest.enable = true;
-      services.liquidd.enable = true;
-      services.rtl.enable = true;
-      services.mempool.enable = true;
       services.lnd.enable = true;
-      services.lightning-loop.enable = true;
-      services.lightning-pool.enable = true;
-      services.charge-lnd.enable = true;
       services.electrs.enable = true;
-      services.fulcrum.enable = true;
       services.btcpayserver.enable = true;
     };
 
@@ -299,35 +150,6 @@ let
         fi
       '';
 
-      # lightning-loop contains no builtin swap server for regtest.
-      # Add a dummy definition.
-      services.lightning-loop.extraConfig = ''
-        server.host=127.0.0.1
-      '';
-
-      # lightning-pool contains no builtin auction server for regtest.
-      # Add a dummy definition
-      services.lightning-pool.extraConfig = ''
-        auctionserver=127.0.0.1
-      '';
-
-      # `validatepegin` is incompatible with regtest
-      services.liquidd.validatepegin = mkForce false;
-
-      # TODO-EXTERNAL:
-      # Reenable `btcpayserver.lbtc` in regtest (and add test in tests.py)
-      # when nbxplorer can parse liquidd regtest blocks.
-      #
-      # When `btcpayserver.lbtc` is enabled in regtest, nxbplorer tries to
-      # generate regtest blocks, which fails because no liquidd wallet exists.
-      # When blocks are pre-generated via `liquidd.postStart`, nbxplorer
-      # fails to parse the blocks:
-      #   info: NBXplorer.Indexer.LBTC: Full node version detected: 210002
-      #   info: NBXplorer.Indexer.LBTC: NBXplorer is correctly whitelisted by the node
-      #     fail: NBXplorer.Indexer.LBTC: Unhandled exception in the indexer, retrying in 10 seconds
-      #       System.IO.EndOfStreamException: No more byte to read
-      #         at NBitcoin.BitcoinStream.ReadWriteBytes(Span`1 data)
-      services.btcpayserver.lbtc = mkForce false;
     };
 
     # Test the special bitcoin RPC setup that lnd uses when bitcoin is pruned
@@ -336,22 +158,6 @@ let
       services.bitcoind.prune = 1000;
     };
 
-    trustedcoin = {
-      imports = [ scenarios.regtestBase ];
-
-      services.clightning = {
-        enable = true;
-        plugins.trustedcoin.enable = true;
-      };
-    };
-
-    # The full regtest test with bitcoind 29 and joinmarket enabled.
-    # Joinmarket only supports bitcoind 29.
-    joinmarket-bitcoind-29 = { config, ... }: {
-      imports = [ scenarios.regtest ];
-      services.joinmarket.enable = true;
-      services.bitcoind.package = config.nix-bitcoin.pkgs.bitcoind_29;
-    };
   } // (import ../dev/dev-scenarios.nix {
     inherit lib scenarios;
   });
@@ -444,7 +250,6 @@ in {
       ) scenarios;
     in
       {
-        clightning-replication = import ./clightning-replication.nix makeTestVM pkgs;
         wireguard-lndconnect = import ./wireguard-lndconnect.nix makeTestVM pkgs;
       } // mainTests;
 

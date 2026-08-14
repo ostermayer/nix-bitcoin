@@ -25,11 +25,8 @@ rec {
       virtualisation.graphics = false;
 
       nix-bitcoin.generateSecrets = true;
-      services.clightning.enable = true;
+      services.lnd.enable = true;
       # disable-dns leads to faster startup in offline VMs
-      services.clightning.extraConfig = ''
-        disable-dns
-      '';
 
       # Avoid lengthy build of the nixos manual
       documentation.nixos.enable = false;
@@ -44,7 +41,7 @@ rec {
         To explore running services, try the following commands:
           nodeinfo
           systemctl status bitcoind
-          systemctl status clightning
+          systemctl status lnd
           bitcoin-cli -getinfo
           lightning-cli getinfo
       '';

@@ -23,7 +23,7 @@ Test scenarios are defined in [tests.nix](./tests.nix) and [tests.py](tests.py).
 ./run-tests.sh -s regtest # Shorthand, equivalent
 
 # To test a single service, use its name as a scenario.
-./run-tests.sh -s clightning
+./run-tests.sh -s lnd
 
 # When no scenario is specified, scenario `default` is used.
 ./run-tests.sh build
@@ -51,11 +51,11 @@ c systemctl status bitcoind
 
 # Run a command in a container.
 # The container is deleted afterwards.
-./run-tests.sh -s clightning container --run c lightning-cli getinfo
+./run-tests.sh -s lnd container --run c lncli getinfo
 
 # Define a custom scenario
 ./run-tests.sh --scenario '{
-  services.clightning.enable = true;
+  services.lnd.enable = true;
   nix-bitcoin.nodeinfo.enable = true;
 }' container --run c nodeinfo
 ```

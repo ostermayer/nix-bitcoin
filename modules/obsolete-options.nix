@@ -17,25 +17,27 @@ let
   mkRenamedEnforceTorOption = service:
     (mkRenamedOptionModule [ "services" service "enforceTor" ] [ "services" service "tor" "enforce" ]);
 
+  # Services removed in the fork trim (2026-08-14). Give users a clear eval
+  # error instead of a bare "option does not exist".
+  mkTrimmedServiceModule = service:
+    mkRemovedOptionModule [ "services" service ] ''
+      The `${service}` service was removed from this fork, which maintains
+      only the services its maintainers deploy (see SECURITY.md). The last
+      revision with the full upstream service set is tag v0.0.139 (identical
+      to the final fort-nix/nix-bitcoin release).
+    '';
 in {
   imports = [
     (mkRenamedOptionModule [ "services" "bitcoind" "bind" ] [ "services" "bitcoind" "address" ])
     (mkRenamedOptionModule [ "services" "bitcoind" "rpcallowip" ] [ "services" "bitcoind" "rpc" "allowip" ])
     (mkRenamedOptionModule [ "services" "bitcoind" "rpcthreads" ] [ "services" "bitcoind" "rpc" "threads" ])
-    (mkRenamedOptionModule [ "services" "clightning" "bind-addr" ] [ "services" "clightning" "address" ])
-    (mkRenamedOptionModule [ "services" "clightning" "bindport" ] [ "services" "clightning" "port" ])
     (mkRenamedOptionModule [ "services" "lnd" "rpclisten" ] [ "services" "lnd" "rpcAddress" ])
     (mkRenamedOptionModule [ "services" "lnd" "listen" ] [ "services" "lnd" "address" ])
     (mkRenamedOptionModule [ "services" "lnd" "listenPort" ] [ "services" "lnd" "port" ])
     (mkRenamedOptionModule [ "services" "btcpayserver" "bind" ] [ "services" "btcpayserver" "address" ])
-    (mkRenamedOptionModule [ "services" "liquidd" "bind" ] [ "services" "liquidd" "address" ])
-    (mkRenamedOptionModule [ "services" "liquidd" "rpcbind" ] [ "services" "liquidd" "rpc" "address" ])
-    # 0.0.70
-    (mkRenamedOptionModule [ "services" "rtl" "cl-rest" ] [ "services" "clightning-rest" ])
 
     (mkRenamedOptionModule [ "nix-bitcoin" "setup-secrets" ] [ "nix-bitcoin" "setupSecrets" ])
 
-    (mkRenamedAnnounceTorOption "clightning")
     (mkRenamedAnnounceTorOption "lnd")
 
     # 0.0.53
@@ -59,87 +61,29 @@ in {
         onion = true;
       }
     '')
-    (mkRemovedOptionModule [ "services" "clightning-rest" "lndconnectOnion" ] ''
-      Set the following options instead:
-      services.clightning-rest.lndconnect = {
-        enable = true;
-        onion = true;
-      }
-    '')
   ] ++
   # 0.0.59
   (map mkSplitEnforceTorOption [
-    "clightning"
-    "lightning-loop"
-    "lightning-pool"
-    "liquid"
     "lnd"
     "bitcoind"
   ]) ++
   (map mkRenamedEnforceTorOption [
     "btcpayserver"
-    "rtl"
     "electrs"
   ]) ++
-  # 0.0.77
-  [
-    (mkRemovedOptionModule [ "services" "clightning" "plugins" "commando" ] ''
-      clightning 0.12.0 ships with a reimplementation of the commando plugin
-      that is incompatible with the commando module that existed in
-      nix-bitcoin. The new built-in commando plugin is always enabled. For
-      information on how to use it, run `lightning-cli help commando` and
-      `lightning-cli help commando-rune`.
-    '')
-  ] ++
-  # 0.0.92
-  [
-    (mkRemovedOptionModule [ "services" "spark-wallet" ] ''
-      Spark Lightning Wallet is unmaintained and incompatible with clightning
-      23.05. Therefore, the spark-wallet module has been removed from
-      nix-bitcoin. For a replacement, consider using the rtl (Ride The
-      Lightning) module or the clightning-rest module in combination with the
-      Zeus mobile wallet.
-    '')
-  ]
-  ++
-  # 0.0.98
-  [
-    (mkRemovedOptionModule [ "services" "clightning" "plugins" "clboss" "acknowledgeDeprecation" ] ''
-      `clboss` is maintained again and has been un-deprecated.
-    '')
-  ]
-  ++
-  # 0.0.106
-  (map (plugin:
-    mkRemovedOptionModule [ "services" "clightning" "plugins" plugin ] ''
-      This plugin is no longer maintained.
-    '')
-    [ "summary" "helpme" "prometheus" ]
-  )
-  ++
-  # 0.0.110
-  [
-    (mkRemovedOptionModule [ "services" "joinmarket" "yieldgenerator" "txfee" ] ''
-      Option `txfee` has been removed in joinmarket 0.9.3:
-      https://github.com/JoinMarket-Org/joinmarket-clientserver/blob/v0.9.3/docs/release-notes/release-notes-0.9.3.md
-    '')
-  ];
-
-  config = {
-    # Migrate old clightning-rest datadir from nix-bitcoin versions < 0.0.70
-    systemd.services.clightning-rest-migrate-datadir = let
-      inherit (config.services) clightning-rest clightning;
-    in mkIf config.services.clightning-rest.enable {
-      requiredBy = [ "clightning-rest.service" ];
-      before = [ "clightning-rest.service" ];
-      script = ''
-        if [[ -e /var/lib/cl-rest/certs ]]; then
-          mv /var/lib/cl-rest/* '${clightning-rest.dataDir}'
-          chown -R ${clightning.user}: '${clightning-rest.dataDir}'
-          rm -r /var/lib/cl-rest
-        fi
-      '';
-      serviceConfig.Type = "oneshot";
-    };
-  };
+  # Fork trim, 2026-08-14
+  (map mkTrimmedServiceModule [
+    "clightning"
+    "clightning-rest"
+    "charge-lnd"
+    "fulcrum"
+    "joinmarket"
+    "joinmarket-ob-watcher"
+    "lightning-loop"
+    "lightning-pool"
+    "liquidd"
+    "mempool"
+    "rtl"
+    "spark-wallet"
+  ]);
 }

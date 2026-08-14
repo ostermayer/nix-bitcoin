@@ -33,9 +33,7 @@
   # Bitcoind is enabled by default via secure-node.nix.
   #
   # Set this option to enable pruning with a specified MiB value.
-  # clightning is compatible with pruning. See
-  # https://github.com/ElementsProject/lightning/#pruning for more information.
-  # LND and electrs are not compatible with pruning.
+  # NOTE: LND and electrs are not compatible with pruning.
   # services.bitcoind.prune = 100000;
   #
   # Set this to accounce the onion service address to peers.
@@ -47,42 +45,9 @@
   #   maxorphantx=110
   # '';
 
-  ### CLIGHTNING
-  # Enable clightning, a Lightning Network implementation in C.
-  services.clightning.enable = true;
-  #
-  # Set this to create an onion service by which clightning can accept incoming connections
-  # via Tor.
-  # The onion service is automatically announced to peers.
-  # nix-bitcoin.onionServices.clightning.public = true;
-  #
-  # == Plugins
-  # See ../README.md (Features → clightning) for the list of available plugins.
-  # services.clightning.plugins.clboss.enable = true;
-  #
-  # == REST server
-  # Set this to create a clightning REST onion service.
-  # This also adds binary `lnconnect-clnrest` to the system environment.
-  # This binary creates QR codes or URLs for connecting applications to clightning
-  # via the REST onion service.
-  # You can also connect via WireGuard instead of Tor.
-  # See ../docs/services.md for details.
-  #
-  # services.clightning.plugins.clnrest = {
-  #   enable = true;
-  #   lnconnect = {
-  #     enable = true;
-  #     onion = true;
-  #   };
-  # };
-
   ### LND
-  # Set this to enable lnd, a lightning implementation written in Go.
-  # services.lnd.enable = true;
-  #
-  # NOTE: In order to avoid collisions with clightning you must disable clightning or
-  # change the services.clightning.port or services.lnd.port to a port other than
-  # 9735.
+  # Enable lnd, a lightning implementation written in Go.
+  services.lnd.enable = true;
   #
   # Set this to create an onion service by which lnd can accept incoming connections
   # via Tor.
@@ -114,58 +79,9 @@
   #
   # Alternatively, you can have these files backed up by services.backups below.
 
-  ### RIDE THE LIGHTNING
-  # Set this to enable RTL, a web interface for lnd and clightning.
-  # services.rtl.enable = true;
-  #
-  # Set this to add a clightning node interface.
-  # Automatically enables clightning.
-  # services.rtl.nodes.clightning.enable = true;
-  #
-  # Set this to add a lnd node interface.
-  # Automatically enables lnd.
-  # services.rtl.nodes.lnd.enable = true;
-  #
-  # You can enable both nodes simultaneously.
-  #
-  # Set this option to enable swaps with lightning-loop.
-  # Automatically enables lightning-loop.
-  # services.rtl.nodes.lnd.loop = true;
-
-  ### MEMPOOL
-  # Set this to enable mempool, a fully featured Bitcoin visualizer, explorer,
-  # and API service.
-  #
-  # services.mempool.enable = true;
-  #
-  # Possible options for the Electrum backend server:
-  #
-  # - electrs (enabled by default):
-  #   Small database size, slow when querying new addresses.
-  #
-  # - fulcrum:
-  #   Large database size, quickly serves arbitrary address queries.
-  #   Enable with:
-  #     services.mempool.electrumServer = "fulcrum";
-  #
-  # Set this to create an onion service to make the mempool web interface
-  # available via Tor:
-  # nix-bitcoin.onionServices.mempool-frontend.enable = true;
-
   ### ELECTRS
   # Set this to enable electrs, an Electrum server implemented in Rust.
   # services.electrs.enable = true;
-
-  ### FULCRUM
-  # Set this to enable fulcrum, an Electrum server implemented in C++.
-  #
-  # Compared to electrs, fulcrum has higher storage demands but
-  # can serve arbitrary address queries instantly.
-  #
-  # Before enabling fulcrum, and for more info on storage demands,
-  # see the description of option `enable` in ../modules/fulcrum.nix
-  #
-  # services.fulcrum.enable = true;
 
   ### BTCPayServer
   # Set this to enable BTCPayServer, a self-hosted, open-source
@@ -176,10 +92,7 @@
   # proxying them through Tor. This means an outside observer can correlate
   # your BTCPayServer usage, like invoice creation times, with your IP address.
   #
-  # Enable this option to connect BTCPayServer to clightning.
-  # services.btcpayserver.lightningBackend = "clightning";
-  #
-  # Enable this option to connect BTCPayServert to lnd.
+  # Enable this option to connect BTCPayServer to lnd.
   # services.btcpayserver.lightningBackend = "lnd";
   #
   # The lightning backend service is automatically enabled.
@@ -191,70 +104,6 @@
   # Security WARNING: Create a btcpayserver administrator account before allowing
   # public access to the web interface.
   # nix-bitcoin.onionServices.btcpayserver.enable = true;
-
-  ### LIQUIDD
-  # Enable this module to use Liquid, a sidechain for an inter-exchange
-  # settlement network linking together cryptocurrency exchanges and
-  # institutions around the world.
-  # services.liquidd.enable = true;
-  #
-  # Liquid can be controlled with command 'elements-cli'.
-
-  ### Hardware wallets
-  # Enable the following to allow using hardware wallets.
-  # See https://github.com/bitcoin-core/HWI for more information.
-  #
-  # Ledger must be initialized through the official ledger live app and the Bitcoin app must
-  # be installed and running on the device.
-  # services.hardware-wallets.ledger = true;
-  #
-  # Trezor can be initialized with the trezorctl command in nix-bitcoin. More information in
-  # `../docs/services.md`.
-  # services.hardware-wallets.trezor = true;
-
-  ### lightning-loop
-  # Set this to enable lightninglab's non-custodial off/on chain bridge.
-  # services.lightning-loop.enable = true;
-  #
-  # loopd (lightning-loop daemon) will be started automatically. Users can
-  # interact with off/on chain bridge using `loop in` and `loop out`.
-  # Automatically enables lnd.
-
-  ### lightning-pool
-  # Set this to enable Lightning Lab's non-custodial batched uniform
-  # clearing-price auction for Lightning Channel Leases.
-  # services.lightning-pool.enable = true;
-  #
-  # Use the `pool` command to interact with the lightning-pool service.
-  # Automatically enables lnd.
-  #
-  # lightning-pool requires that lnd has a publicly reachable address.
-  # Set this to create a public onion service for lnd.
-  # nix-bitcoin.onionServices.lnd.public = true;
-
-  ### charge-lnd
-  # Set this to enable charge-lnd, a simple policy based fee manager for
-  # LND. With this tool you can set fees to autobalance, recover channel open
-  # costs, use on-chain fees as reference, or just use static fees. You decide.
-  # services.charge-lnd.enable = true;
-  #
-  # Define policies as outlined in the project documentation.
-  # services.charge-lnd.policies = ''
-  # '';
-
-  ### JOINMARKET
-  # Set this to enable the JoinMarket service, including its command-line scripts.
-  # These scripts have prefix 'jm-', like 'jm-tumbler'.
-  # Note: JoinMarket has full access to bitcoind, including its wallet functionality.
-  # services.joinmarket.enable = true;
-  #
-  # Set this to enable the JoinMarket Yield Generator Bot. You will be able to
-  # earn sats by providing CoinJoin liquidity. This makes it impossible to use other
-  # scripts that access your wallet.
-  # services.joinmarket.yieldgenerator.enable = true;
-  #
-  # Set this to enable the JoinMarket order book watcher.
-  # services.joinmarket-ob-watcher.enable = true;
 
   ### Nodeinfo
   # Set this to add command `nodeinfo` to the system environment.
@@ -280,7 +129,7 @@
   #   hostNames = [ "host" ];
   #   publicKey = "<ssh public from `ssh-keyscan`>";
   # };
-  # If you also want to backup bulk data like the Bitcoin & Liquid blockchains
+  # If you also want to backup bulk data like the Bitcoin blockchain
   # and electrs data directory, enable
   # services.backups.with-bulk-data = true;
 
@@ -329,5 +178,5 @@
   # The nix-bitcoin release version that your config is compatible with.
   # When upgrading to a backwards-incompatible release, nix-bitcoin will display an
   # an error and provide instructions for migrating your config to the new release.
-  nix-bitcoin.configVersion = "0.0.85";
+  nix-bitcoin.configVersion = "0.0.140";
 }

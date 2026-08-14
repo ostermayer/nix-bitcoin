@@ -298,11 +298,8 @@ buildable=(
     full
     regtest
     hardened
-    clightning-replication
     lndPruned
     wireguard-lndconnect
-    trustedcoin
-    joinmarket-bitcoind-29
 )
 buildable() { buildTests buildable "$@"; }
 

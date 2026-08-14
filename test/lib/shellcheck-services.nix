@@ -32,7 +32,7 @@ let
 
   # A list of all service names that are defined in source paths prefixed by
   # `sourcePrefix`.
-  # [ "bitcoind", "clightning", ... ]
+  # [ "bitcoind", "lnd", ... ]
   #
   # Algorithm: Parse defintions of `systemd.services` and return all services
   # that only have definitions located within `sourcePrefix`.

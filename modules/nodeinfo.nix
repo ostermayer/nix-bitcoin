@@ -130,11 +130,6 @@ in {
 
     nix-bitcoin.nodeinfo.services = with nodeinfoLib; {
       bitcoind = mkInfo "";
-      clightning = mkInfo ''
-        info["nodeid"] = shell("lightning-cli getinfo | jq -r '.id'")
-        if 'onion_address' in info:
-            info["id"] = f"{info['nodeid']}@{info['onion_address']}"
-      '';
       lnd = name: cfg: mkInfo (''
         info["rest_address"] = "${nbLib.addressWithPort cfg.restAddress cfg.restPort}"
       '' + mkIfOnionPort "lnd-rest" (onionPort: ''
@@ -142,22 +137,8 @@ in {
       '') + ''
         info["nodeid"] = shell("lncli getinfo | jq -r '.identity_pubkey'")
       '') name cfg;
-      clnrest = name: cfg: mkInfoLong {
-        inherit name cfg;
-        systemdServiceName = "clightning";
-      };
-      clightning-rest = mkInfo "";
       electrs = mkInfo "";
-      fulcrum = mkInfo "";
       btcpayserver = mkInfo "";
-      liquidd = mkInfo "";
-      joinmarket-ob-watcher = mkInfo "";
-      rtl = mkInfo "";
-      mempool = mkInfo "";
-      mempool-frontend = name: cfg: mkInfoLong {
-        inherit name cfg;
-        systemdServiceName = "nginx";
-      };
       # Only add sshd when it has an onion service
       sshd = name: cfg: mkIfOnionPort "sshd" (onionPort: ''
         add_service("sshd", """info["onion_address"] = get_onion_address("sshd", ${onionPort})""")

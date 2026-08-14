@@ -107,15 +107,6 @@ in {
         btcpayserver = {
           externalPort = 80;
         };
-        joinmarket-ob-watcher = {
-          externalPort = 80;
-        };
-        rtl = {
-          externalPort = 80;
-        };
-        mempool-frontend = {
-          externalPort = 80;
-        };
       };
     }
   ];

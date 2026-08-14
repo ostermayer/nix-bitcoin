@@ -226,19 +226,15 @@ in {
   # Service-specific config
   {
     nix-bitcoin.netns-isolation.services = {
+      # ids of services removed in the fork trim (2026-08-14) stay reserved:
+      # 13 clightning, 15 liquidd, 22 lightning-loop, 25 joinmarket,
+      # 26 joinmarket-ob-watcher, 27 lightning-pool, 28 charge-lnd, 29 rtl,
+      # 30 clightning-rest, 31 fulcrum, 32 mempool.
       bitcoind = {
         id = 12;
       };
-      clightning = {
-        id = 13;
-        connections = [ "bitcoind" ];
-      };
       lnd = {
         id = 14;
-        connections = [ "bitcoind" ];
-      };
-      liquidd = {
-        id = 15;
         connections = [ "bitcoind" ];
       };
       electrs = {
@@ -248,61 +244,14 @@ in {
       nginx = {
         id = 21;
       };
-      lightning-loop = {
-        id = 22;
-        connections = [ "lnd" ];
-      };
       nbxplorer = {
         id = 23;
-        connections = [ "bitcoind" ]
-                      ++ optional config.services.btcpayserver.lbtc "liquidd";
+        connections = [ "bitcoind" ];
       };
       btcpayserver = {
         id = 24;
         connections = [ "nbxplorer" ]
-                      ++ optional (config.services.btcpayserver.lightningBackend == "lnd") "lnd"
-                      ++ optional config.services.btcpayserver.lbtc "liquidd";
-        # communicates with clightning over rpc socket
-      };
-      joinmarket = {
-        id = 25;
-        connections = [ "bitcoind" ];
-      };
-      joinmarket-ob-watcher = {
-        id = 26;
-        connections = [ "bitcoind" ];
-      };
-      lightning-pool = {
-        id = 27;
-        connections = [ "lnd" ];
-      };
-      charge-lnd = {
-        id = 28;
-        connections = [ "lnd" "electrs" ];
-      };
-      rtl = {
-        id = 29;
-        connections = let
-          nodes = config.services.rtl.nodes;
-        in
-          optional nodes.lnd.enable "lnd" ++
-          optional (nodes.lnd.enable && nodes.lnd.loop) "lightning-loop" ++
-          optional nodes.clightning.enable "clightning";
-      };
-      clightning-rest = {
-        id = 30;
-      };
-      fulcrum = {
-        id = 31;
-        connections = [ "bitcoind" ];
-      };
-      mempool = {
-        id = 32;
-        connections = [
-          "bitcoind"
-          "nginx"
-          (if (config.services.mempool.electrumServer == "electrs") then "electrs" else "fulcrum")
-        ];
+                      ++ optional (config.services.btcpayserver.lightningBackend == "lnd") "lnd";
       };
     };
 
@@ -315,52 +264,16 @@ in {
       ] ++ map (n: netns.${n}.address) netns.bitcoind.availableNetns;
     };
 
-    services.clightning.address = netns.clightning.address;
-    services.clightning.plugins.clnrest.address = netns.clightning.address;
-
     services.lnd = {
       address = netns.lnd.address;
       rpcAddress = netns.lnd.address;
       restAddress = netns.lnd.address;
     };
 
-    services.liquidd = {
-      address = netns.liquidd.address;
-      rpc.address = netns.liquidd.address;
-      rpcallowip = [
-        bridgeIp # For operator user
-        netns.liquidd.address
-      ] ++ map (n: netns.${n}.address) netns.liquidd.availableNetns;
-    };
-
     services.electrs.address = netns.electrs.address;
-
-    services.fulcrum.address = netns.fulcrum.address;
-
-    services.lightning-loop.rpcAddress = netns.lightning-loop.address;
 
     services.nbxplorer.address = netns.nbxplorer.address;
     services.btcpayserver.address = netns.btcpayserver.address;
-
-    services.joinmarket = mkIf config.services.joinmarket.enable {
-      payjoinAddress = netns.joinmarket.address;
-      messagingAddress = netns.joinmarket.address;
-      cliExec = mkCliExec "joinmarket";
-    };
-    systemd.services.joinmarket-yieldgenerator = mkIf config.services.joinmarket.yieldgenerator.enable {
-      serviceConfig.NetworkNamespacePath = "/var/run/netns/nb-joinmarket";
-    };
-
-    services.joinmarket-ob-watcher.address = netns.joinmarket-ob-watcher.address;
-
-    services.lightning-pool.rpcAddress = netns.lightning-pool.address;
-
-    services.rtl.address = netns.rtl.address;
-
-    services.clightning-rest.address = netns.clightning-rest.address;
-
-    services.mempool.address = netns.mempool.address;
-    services.mempool.frontend.address = netns.nginx.address;
   }
   ]);
 }

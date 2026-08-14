@@ -9,25 +9,14 @@
     ./operator.nix
 
     # Main features
+    # This fork maintains only the services its maintainers deploy (see
+    # SECURITY.md). Everything else was removed 2026-08-14; the last revision
+    # carrying the full upstream set is tag v0.0.139.
     ./bitcoind.nix
-    ./clightning.nix
-    ./clightning-plugins
-    ./clightning-rest.nix
-    ./clightning-replication.nix
     ./lnd.nix
-    ./lightning-loop.nix
-    ./lightning-pool.nix
-    ./charge-lnd.nix
     ./lndconnect.nix # Requires onion-addresses.nix
-    ./rtl.nix
-    ./mempool.nix
     ./electrs.nix
-    ./fulcrum.nix
-    ./liquid.nix
     ./btcpayserver.nix
-    ./joinmarket.nix
-    ./joinmarket-ob-watcher.nix
-    ./hardware-wallets.nix
 
     # Support features
     ./versioning.nix

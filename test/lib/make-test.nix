@@ -77,16 +77,6 @@ let
               };
             }
 
-            # Enable FUSE inside the container when clightning replication
-            # is enabled.
-            (
-              let
-                s = config.config.services;
-              in
-                lib.mkIf (s ? clightning && s.clightning.enable && s.clightning.replication.enable) {
-                  allowedDevices = [ { node = "/dev/fuse"; modifier = "rw"; } ];
-                }
-            )
           ];
         };
       };

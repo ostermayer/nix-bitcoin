@@ -20,10 +20,6 @@ cat > "$tmpDir/configuration.nix" <<EOF
       isNormalUser = true;
       password = "a";
     };
-    # When WAN is disabled, DNS bootstrapping slows down service startup by ~15 s
-    services.clightning.extraConfig = ''
-      disable-dns
-    '';
   }
 EOF
 

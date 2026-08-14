@@ -36,7 +36,7 @@
           # Enable some services.
           # See ../configuration.nix for all available features.
           services.bitcoind.enable = true;
-          services.clightning.enable = true;
+          services.lnd.enable = true;
 
           # When using nix-bitcoin as part of a larger NixOS configuration, set the following to enable
           # interactive access to nix-bitcoin features (like bitcoin-cli) for your system's main user

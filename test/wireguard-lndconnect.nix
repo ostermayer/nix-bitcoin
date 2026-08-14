@@ -18,24 +18,6 @@ makeTestVM {
       nix-bitcoin.generateSecrets = true;
       nix-bitcoin.operator.enable = true;
 
-      services.clightning = {
-        enable = true;
-        plugins.clnrest = {
-          enable = true;
-          lnconnect.enable = true;
-        };
-      };
-
-      services.clightning-rest = {
-        enable = true;
-        lndconnect.enable = true;
-      };
-      # TODO-EXTERNAL:
-      # When WAN is disabled, DNS bootstrapping slows down service startup by ~15 s.
-      services.clightning.extraConfig = ''
-        disable-dns
-      '';
-
       services.lnd = {
         enable = true;
         lndconnect.enable = true;
@@ -61,16 +43,8 @@ makeTestVM {
         u = Url.urlparse(url)
         data = {'host': u.hostname, 'port': u.port}
         queries = Url.parse_qs(u.query)
-        if url.startswith("clnrest"):
-            data['rune'] = queries['rune'][0]
-        else:
-            macaroon = queries['macaroon'][0]
-            if url.startswith("c-lightning-rest"):
-              data['macaroon_hex'] = macaroon
-            else:
-              # lnd
-              data['macaroon_hex'] = base64.urlsafe_b64decode(macaroon + '===').hex().upper()
-
+        macaroon = queries['macaroon'][0]
+        data['macaroon_hex'] = base64.urlsafe_b64decode(macaroon + '===').hex().upper()
         return SimpleNamespace(**data)
 
     client.start()
@@ -101,26 +75,6 @@ makeTestVM {
           client.succeed(
               f"curl -fsS --max-time 3 --insecure --header 'Grpc-Metadata-macaroon: {api.macaroon_hex}' "
               f"-X GET https://{api.host}:{api.port}/v1/getinfo"
-          )
-
-      with subtest("lnconnect-clnrest-wg"):
-          server.wait_for_unit("clightning.service")
-          lndconnect_url = server.succeed("runuser -u operator -- lnconnect-clnrest-wg --url")
-          api = parse_lndconnect_url(lndconnect_url)
-          # Make clnrest API call
-          client.succeed(
-              f"curl -fsS --max-time 3 --insecure --header 'rune: {api.rune}' "
-              f"-X POST https://{api.host}:{api.port}/v1/getinfo"
-          )
-
-      with subtest("lndconnect-clightning-wg"):
-          server.wait_for_unit("clightning-rest.service")
-          lndconnect_url = server.succeed("runuser -u operator -- lndconnect-clightning-wg --url")
-          api = parse_lndconnect_url(lndconnect_url)
-          # Make clightning-rest API call
-          client.succeed(
-              f"curl -fsS --max-time 3 --insecure --header 'macaroon: {api.macaroon_hex}' "
-              f"--header 'encodingtype: hex' -X GET https://{api.host}:{api.port}/v1/getinfo"
           )
   '';
 }
