@@ -10,7 +10,7 @@
 
     # Main features
     # This fork maintains only the services its maintainers deploy (see
-    # SECURITY.md). Everything else was removed 2026-08-14; the last revision
+    # SECURITY.md). Everything else was removed in the trim; the last revision
     # carrying the full upstream set is tag v0.0.139.
     ./bitcoind.nix
     ./lnd.nix

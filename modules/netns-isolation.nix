@@ -226,7 +226,7 @@ in {
   # Service-specific config
   {
     nix-bitcoin.netns-isolation.services = {
-      # ids of services removed in the fork trim (2026-08-14) stay reserved:
+      # ids of services removed in the fork trim stay reserved:
       # 13 clightning, 15 liquidd, 22 lightning-loop, 25 joinmarket,
       # 26 joinmarket-ob-watcher, 27 lightning-pool, 28 charge-lnd, 29 rtl,
       # 30 clightning-rest, 31 fulcrum, 32 mempool.

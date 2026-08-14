@@ -131,12 +131,12 @@ this audit by deletion. Status of every finding:
 | clboss 0.16.1 fund theft | CLOSED (deleted) | Fork no longer ships clightning/clboss |
 | CLN 26.04.1 funds loss | CLOSED (deleted) | Same |
 | joinmarket 0.9.11 snooping | CLOSED (deleted) | joinmarket removed; upstream archived |
-| RTL 0.15.8 | CLOSED (deleted) | RTL removed (fleet uses ThunderHub) |
+| RTL 0.15.8 | CLOSED (deleted) | RTL removed in the trim |
 | bitcoind_29 29.2, knots, loop | CLOSED (deleted) | Removed from fork |
 | nbxplorer 2.6.7 | FIXED | Bumped to 2.6.10 (f9135cd) |
 | M-1 clightning-rest 0.0.0.0 | CLOSED (deleted) | Module removed |
 | M-2 lndconnect 0.0.0.0 rebind | FIXED | lndconnect no longer touches restAddress; exposure is explicit (modules/lndconnect.nix) |
-| M-3 public RPC whitelist | FIXED | Dropped scantxoutset, gettxoutsetinfo, getblocktemplate, getpeerinfo, getnodeaddresses, getblockfrompeer; whitelist now mkDefault-overridable |
+| M-3 public RPC whitelist | FIXED | Dropped the DoS/side-effect methods (scantxoutset, gettxoutsetinfo, getblocktemplate, getblockfrompeer); whitelist now mkDefault-overridable. getpeerinfo/getnodeaddresses are KEPT — the "public" user is also lnd/nbxplorer's local RPC user and they require them (removing them fails lnd's chain-backend health check). Only trim those two if you actually expose this user over a public proxy. |
 | M-4 onion-addresses symlinks | FIXED | Root builds dirs root:root then chowns; symlink reads refused (2aa9475) |
 | M-5 clightning-replication hardening | CLOSED (deleted) | Module removed |
 | M-6 netns-exec PATH/env | FIXED | Absolute path required (execv), cap returns checked, exec failure nonzero; whitelist updated to live services |

@@ -17,7 +17,7 @@ let
   mkRenamedEnforceTorOption = service:
     (mkRenamedOptionModule [ "services" service "enforceTor" ] [ "services" service "tor" "enforce" ]);
 
-  # Services removed in the fork trim (2026-08-14). Give users a clear eval
+  # Services removed in the fork trim. Give users a clear eval
   # error instead of a bare "option does not exist".
   mkTrimmedServiceModule = service:
     mkRemovedOptionModule [ "services" service ] ''
@@ -71,7 +71,7 @@ in {
     "btcpayserver"
     "electrs"
   ]) ++
-  # Fork trim, 2026-08-14
+  # Fork trim
   (map mkTrimmedServiceModule [
     "clightning"
     "clightning-rest"

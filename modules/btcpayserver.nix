@@ -27,7 +27,7 @@ let
         description = "The data directory for btcpayserver.";
       };
       lightningBackend = mkOption {
-        # This fork removed the upstream clightning backend (trim 2026-08-14)
+        # This fork removed the upstream clightning backend
         type = types.nullOr (types.enum [ "lnd" ]);
         default = null;
         description = "The lightning node implementation to use.";

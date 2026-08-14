@@ -4,7 +4,7 @@
 # Each override must be version-guarded so it turns inert once the pinned
 # nixpkgs catches up. Flake updates are then always safe to take.
 #
-# Example (from the 2026-08-14 clboss fund-theft fix, since resolved by
+# Example (from the clboss fund-theft fix, since resolved by
 # trimming clightning support from this fork):
 #
 #   clboss = if lagging pkgsUnstable.clboss "0.16.2" then pkgsUnstable.clboss.overrideAttrs (old: rec {
