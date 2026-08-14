@@ -119,7 +119,46 @@ Fix: consider dropping the zmq plugin, or budget maintenance for the fork.
 - `defaultHardening` (pkgs/lib.nix) is applied to every daemon service; clightning-replication (M-5) is the only exception found.
 - helper/push-release.sh: token from `pass`, GPG-signed artifacts, signature verified against pinned fingerprint on fetch.
 
-## 4. Maintenance posture (the real long-term risk)
+## 4. Resolution log (2026-08-14, same day)
+
+This fork was trimmed on the same day to only the services its maintainers
+deploy (commit ea0b625): bitcoind, lnd (+lndinit, lndconnect), electrs,
+btcpayserver/nbxplorer, and supporting infrastructure. That closed most of
+this audit by deletion. Status of every finding:
+
+| Finding | Status | Fix |
+|---------|--------|-----|
+| clboss 0.16.1 fund theft | CLOSED (deleted) | Fork no longer ships clightning/clboss |
+| CLN 26.04.1 funds loss | CLOSED (deleted) | Same |
+| joinmarket 0.9.11 snooping | CLOSED (deleted) | joinmarket removed; upstream archived |
+| RTL 0.15.8 | CLOSED (deleted) | RTL removed (fleet uses ThunderHub) |
+| bitcoind_29 29.2, knots, loop | CLOSED (deleted) | Removed from fork |
+| nbxplorer 2.6.7 | FIXED | Bumped to 2.6.10 (f9135cd) |
+| M-1 clightning-rest 0.0.0.0 | CLOSED (deleted) | Module removed |
+| M-2 lndconnect 0.0.0.0 rebind | FIXED | lndconnect no longer touches restAddress; exposure is explicit (modules/lndconnect.nix) |
+| M-3 public RPC whitelist | FIXED | Dropped scantxoutset, gettxoutsetinfo, getblocktemplate, getpeerinfo, getnodeaddresses, getblockfrompeer; whitelist now mkDefault-overridable |
+| M-4 onion-addresses symlinks | FIXED | Root builds dirs root:root then chowns; symlink reads refused (2aa9475) |
+| M-5 clightning-replication hardening | CLOSED (deleted) | Module removed |
+| M-6 netns-exec PATH/env | FIXED | Absolute path required (execv), cap returns checked, exec failure nonzero; whitelist updated to live services |
+| M-7 ecdsa CVE-meta unlock | CLOSED (deleted) | Left with hardware-wallets |
+| M-8 txzmq | CLOSED (deleted) | Removed with clightning plugins |
+| L secrets argv | FIXED | rpcauth.py gets the password via file, not argv |
+| L unquoted expansions in setup-secrets | FIXED | escapeShellArg on all interpolations |
+| L wireguard self-re-exec | FIXED | Explicit `wg set` call, no sed-patched re-execution |
+| L clightning group == admin | CLOSED (deleted) | clightning removed |
+| L bitcoind cookie group-readable | DOCUMENTED | By design for local operator convenience; warning comment added at modules/bitcoind.nix |
+| L bitcoind-remote password append | FIXED | Line rewritten, not appended; 0640 enforced |
+| L krops tag pin | FIXED | Pinned commit hash of tag 1.26.2 |
+| L doCheck=false / RTL npm flags / nixops | CLOSED (mostly deleted) | nixops remains dev-only tooling |
+
+Verified on the build host: all kept packages build (nbxplorer 2.6.10,
+lndinit, netns-exec), all 12 real test scenarios evaluate, netns-exec
+functional tests pass, rpcauth wrapper produces valid HMAC without argv
+exposure. `tests.base`/`tests.regtestBase` fail to evaluate both before
+and after the trim — pre-existing upstream scaffolding quirk, not a
+regression.
+
+## 5. Maintenance posture (the real long-term risk)
 
 The snapshot is fresh (nixpkgs pins are ~5 days old), but the security model of this repo is
 **rolling nixpkgs pins**. Once maintenance stalls, every component above decays at the pace of
