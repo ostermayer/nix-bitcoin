@@ -1,28 +1,19 @@
 # Security-driven version overrides for packages whose pinned nixpkgs
 # version ships known vulnerabilities.
 #
-# Each override is version-guarded: once the pinned nixpkgs reaches the
-# fixed version, the override turns inert and the nixpkgs package is used
-# unchanged. Flake updates are therefore always safe to take; overrides
-# simply stop applying. Keep the `lagging` version exactly equal to the
-# first fixed release.
+# Each override must be version-guarded so it turns inert once the pinned
+# nixpkgs catches up. Flake updates are then always safe to take.
 #
-# Entry pattern (hash from the upstream signed SHA256SUMS, SRI format):
+# Example (from the 2026-08-14 clboss fund-theft fix, since resolved by
+# trimming clightning support from this fork):
 #
-#   lnd = if lagging pkgsUnstable.lnd "0.21.2-beta" then
-#     pkgsUnstable.lnd.overrideAttrs (old: rec {
-#       version = "0.21.2-beta";
-#       src = pkgs.fetchFromGitHub {
-#         owner = "lightningnetwork";
-#         repo = "lnd";
-#         rev = "v${version}";
-#         hash = "sha256-...";
-#       };
-#     }) else pkgsUnstable.lnd;
-#
-# The 2026-08-14 entries (clboss, clightning, lightning-loop,
-# bitcoind-knots) were dropped with the fork trim: those packages are no
-# longer shipped. See tag v0.0.139 for the full upstream set.
+#   clboss = if lagging pkgsUnstable.clboss "0.16.2" then pkgsUnstable.clboss.overrideAttrs (old: rec {
+#     version = "0.16.2";
+#     src = pkgs.fetchzip {
+#       url = "https://github.com/ZmnSCPxj/clboss/releases/download/v${version}/clboss-v${version}.tar.gz";
+#       hash = "...";
+#     };
+#   }) else pkgsUnstable.clboss;
 { pkgs, pkgsUnstable }:
 let
   inherit (pkgs) lib;
