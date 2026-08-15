@@ -111,6 +111,27 @@ let
       services.lnd.enable = true;
       services.electrs.enable = true;
       services.btcpayserver.enable = true;
+
+      # Regression guard for two production failures: lnd must survive a
+      # bitcoind restart (it `wants`, not `requires`, bitcoind), and its
+      # chain-backend health check must keep passing across the restart — which
+      # requires the public RPC whitelist to include getpeerinfo/getnodeaddresses
+      # (lnd uses that RPC user). Removing either would flap lnd here.
+      tests.lndSurvivesBitcoindRestart = true;
+      test.extraTestScript = ''
+        @test("lndSurvivesBitcoindRestart")
+        def _():
+            assert_running("lnd")
+            machine.succeed("systemctl restart bitcoind.service")
+            machine.wait_for_unit("bitcoind.service")
+            machine.wait_until_succeeds("runuser -u operator -- bitcoin-cli getnetworkinfo")
+            # Give lnd's chain-backend health check time to run a few cycles; it
+            # self-shuts-down after 3 failures, so a missing whitelist entry
+            # would take lnd down in this window.
+            machine.sleep(45)
+            assert_running("lnd")
+            machine.fail("journalctl -u lnd | grep -q 'chain backend failed'")
+      '';
     };
 
     # netns and regtest, without secure-node.nix
