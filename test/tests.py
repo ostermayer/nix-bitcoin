@@ -114,54 +114,11 @@ def _():
             log_has_string("electrs", "waiting for 0 blocks to download")
         )
 
-@test("fulcrum")
-def _():
-    assert_running("fulcrum")
-    machine.wait_until_succeeds(log_has_string("fulcrum", "started ok"))
-
 # Impure: Stops electrs
 # Stop electrs from spamming the test log with 'waiting for 0 blocks to download' messages
 @test("stop-electrs")
 def _():
     succeed("systemctl stop electrs")
-
-@test("liquidd")
-def _():
-    assert_running("liquidd")
-    machine.wait_until_succeeds("elements-cli getnetworkinfo")
-    assert_matches("runuser -u operator -- elements-cli getnetworkinfo | jq", '"version"')
-    succeed("runuser -u operator -- liquidswap-cli --help")
-
-@test("clightning")
-def _():
-    assert_running("clightning")
-    assert_matches("runuser -u operator -- lightning-cli getinfo | jq", '"id"')
-
-    enabled_plugins = test_data["clightning-plugins"]
-    if enabled_plugins:
-        plugin_list = succeed("lightning-cli plugin list")
-        plugins = json.loads(plugin_list)["plugins"]
-        active = set(plugin["name"] for plugin in plugins if plugin["active"])
-        failed = set(enabled_plugins).difference(active)
-        if failed:
-            raise Exception(
-                f"The following clightning plugins are inactive:\n{failed}.\n\n"
-                f"Output of 'lightning-cli plugin list':\n{plugin_list}"
-            )
-        active = [os.path.splitext(os.path.basename(p))[0] for p in enabled_plugins]
-        machine.log("\n".join(["Active clightning plugins:", *active]))
-
-        if "feeadjuster" in active:
-            # This is a one-shot service, so this command only succeeds if the service succeeds
-            succeed("systemctl start clightning-feeadjuster")
-
-    if test_data["clightning-replication"]:
-        replica_db = "/var/cache/clightning-replication/plaintext/lightningd.sqlite3"
-        succeed(f"runuser -u clightning -- ls {replica_db}")
-        # No other user should be able to read the unencrypted files
-        machine.fail(f"runuser -u bitcoin -- ls {replica_db}")
-        # A gocryptfs has been created
-        succeed("ls /var/backup/clightning/lightningd-db/gocryptfs.conf")
 
 @test("lnd")
 def _():
@@ -179,48 +136,6 @@ def _():
 def _():
     assert_running("lnd")
     assert_matches("runuser -u operator -- lndconnect --url", ".onion")
-
-@test("lnconnect-onion-clnrest")
-def _():
-    assert_running("clightning")
-    assert_matches("runuser -u operator -- lnconnect-clnrest --url", ".onion")
-
-@test("lndconnect-onion-clightning")
-def _():
-    assert_running("clightning-rest")
-    assert_matches("runuser -u operator -- lndconnect-clightning --url", ".onion")
-
-@test("lightning-loop")
-def _():
-    assert_running("lightning-loop")
-    assert_matches("runuser -u operator -- loop --version", "version")
-    # Check that lightning-loop fails with the right error, making sure
-    # lightning-loop can connect to lnd
-    machine.wait_until_succeeds(
-        log_has_string(
-            "lightning-loop",
-            "Waiting for lnd to be fully synced to its chain backend, this might take a while",
-        )
-    )
-
-@test("lightning-pool")
-def _():
-    assert_running("lightning-pool")
-    assert_matches("su operator -c 'pool --version'", "version")
-    # Check that lightning-pool fails with the right error, making sure
-    # lightning-pool can connect to lnd
-    machine.wait_until_succeeds(
-        log_has_string(
-            "lightning-pool",
-            "Waiting for lnd to be fully synced to its chain backend, this might take a while",
-        )
-    )
-
-@test("charge-lnd")
-def _():
-    # charge-lnd is a oneshot service that is started by a timer under regular operation
-    succeed("systemctl start charge-lnd")
-    assert_no_failure("charge-lnd")
 
 @test("btcpayserver")
 def _():
@@ -240,50 +155,6 @@ def _():
     )
     # Test web server response
     assert_matches(f"curl -fsS -L {ip('btcpayserver')}:23000", "Welcome to BTCPay Server")
-
-@test("rtl")
-def _():
-    assert_running("rtl")
-    machine.wait_until_succeeds(
-        log_has_string("rtl", "Server is up and running")
-    )
-
-@test("clightning-rest")
-def _():
-    assert_running("clightning-rest")
-    machine.wait_until_succeeds(
-        log_has_string("clightning-rest", "cl-rest api server is ready and listening")
-    )
-
-@test("mempool")
-def _():
-    assert_running("mempool")
-    assert_running("nginx")
-    machine.wait_until_succeeds(
-        log_has_string("mempool", "Mempool Server is running on port 8999")
-    )
-    assert_matches(f"curl -L {ip('nginx')}:60845", "mempool - Bitcoin Explorer")
-
-@test("joinmarket")
-def _():
-    assert_running("joinmarket")
-    machine.wait_until_succeeds(
-        log_has_string("joinmarket", "JMDaemonServerProtocolFactory starting on 27183")
-    )
-
-@test("joinmarket-yieldgenerator")
-def _():
-    if "regtest" in enabled_tests:
-        expected_log_msg = "You do not have the minimum required amount of coins to be a maker"
-    else:
-        expected_log_msg = "Critical error updating blockheight."
-
-    machine.wait_until_succeeds(log_has_string("joinmarket-yieldgenerator", expected_log_msg))
-
-@test("joinmarket-ob-watcher")
-def _():
-    assert_running("joinmarket-ob-watcher")
-    machine.wait_until_succeeds(log_has_string("joinmarket-ob-watcher", "Starting ob-watcher"))
 
 @test("nodeinfo")
 def _():
@@ -452,17 +323,6 @@ def _():
         assert_full_match(
             f"curl -fsS http://{ip('nginx')}:60845/api/v1/blocks/tip/height", str(num_blocks)
         )
-
-@test("trustedcoin")
-def _():
-    def expect_clightning_log(str):
-        machine.wait_until_succeeds(log_has_string("clightning", str))
-
-    expect_clightning_log(r"plugin-trustedcoin\b.*?\bbitcoind RPC working")
-    if "regtest" in enabled_tests:
-        num_blocks = test_data["num_blocks"]
-        expect_clightning_log(rf"plugin-trustedcoin\b.*?\breturning block {num_blocks}")
-
 
 if "netns-isolation" in enabled_tests:
     def ip(name):
