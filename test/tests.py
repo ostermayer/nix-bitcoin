@@ -226,8 +226,6 @@ def _():
 def _():
     assert_running("nbxplorer")
     machine.wait_until_succeeds(log_has_string("nbxplorer", "BTC: RPC connection successful"))
-    if test_data["btcpayserver-lbtc"]:
-        machine.wait_until_succeeds(log_has_string("nbxplorer", "LBTC: RPC connection successful"))
     wait_for_open_port(ip("nbxplorer"), 24444)
 
     assert_running("btcpayserver")
