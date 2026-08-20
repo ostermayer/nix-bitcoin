@@ -117,7 +117,9 @@ LEAK=0
 for f in "${PUBFILES[@]}"; do [ -f "$f" ] || continue
   for s in "${secrets[@]}"; do [ -n "$s" ] || continue
     first=$(printf '%s' "$s" | head -1)
-    if [ -n "$first" ] && grep -Fq "$first" "$f"; then log "SECRET VALUE present in $f — refusing to publish"; LEAK=1; fi
+    # `--`: a key body's first line starts with "-----", which grep would
+    # otherwise parse as options.
+    if [ -n "$first" ] && grep -Fq -- "$first" "$f"; then log "SECRET VALUE present in $f — refusing to publish"; LEAK=1; fi
   done
   # (b) fail closed on ANY private-key material, whatever its source.
   if grep -qE 'PRIVATE KEY|BEGIN (OPENSSH|RSA|EC|DSA|PGP)' "$f"; then
