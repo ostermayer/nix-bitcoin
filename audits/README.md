@@ -46,9 +46,12 @@ demands `file:line` evidence and an explicit attack scenario for every item.
 The runner contains no secrets (API keys are read at runtime from a file outside
 the repo). The audit runs only against this **public** fork's code, read-only.
 Before anything is published, every output file is scrubbed of the known secret
-values and **publishing fails closed** if any secret still appears — so even a
-model that dumps its environment mid-run cannot leak a key into the public
-history.
+values, and **publishing fails closed** — it refuses to publish — if either (a)
+any known secret value survives the scrub, or (b) *any* private-key material
+appears at all (`PRIVATE KEY` / `BEGIN OPENSSH|RSA|EC|DSA|PGP`), known or not.
+So even though the model has a shell and the runner's API keys and SSH keys are
+reachable on the audit host, a model that dumps its environment or reads a key
+file cannot leak it into the public history — the run just declines to publish.
 
 ## Reproducing a run
 

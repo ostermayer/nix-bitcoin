@@ -96,21 +96,35 @@ corrob=$(JQ '[group_by(.file+"|"+(.title//""))[]|select(length>1)]|length' "$MER
 log "report: $REPORT"
 
 # --- SECRET SCRUB (fail-closed) --------------------------------------------
-# Redact known secret values from everything we might publish, then verify none
-# remain. If any secret survives, ABORT publishing entirely.
+# The model has a bash tool and the API keys live in its environment, and a
+# repo-write SSH deploy key + a signing key sit on disk (readable by this user).
+# A curious model could `env` or `cat ~/.ssh/…` into its transcript. So: redact
+# the known secret VALUES, and then FAIL CLOSED — refuse to publish — if (a) any
+# known secret value survives, or (b) ANY private-key material appears at all,
+# known or not. We never try to "clean" an unknown key; we just refuse.
 PUBFILES=("$REPORT" "$MERGED"); for m in "${MODELS[@]}"; do PUBFILES+=("$OUT/$m.findings.json" "$OUT/$m.raw.txt"); done
 secrets=("${FIREWORKS_API_KEY:-}" "${BRAVE_API_KEY:-}" "${EXA_API_KEY:-}" "${RESEND_API_KEY:-}")
+# Include the private-key file contents so a leaked key body is redacted too.
+for k in "$DEPLOY_KEY" "$SIGN_KEY"; do [ -f "$k" ] && secrets+=("$(cat "$k")"); done
 for f in "${PUBFILES[@]}"; do [ -f "$f" ] || continue
   for s in "${secrets[@]}"; do [ -n "$s" ] || continue
-    esc=$(printf '%s' "$s" | sed 's/[#&/\\]/\\&/g'); sed -i "s#${esc}#[REDACTED]#g" "$f"
+    # Redact per-line so multi-line key bodies are handled; then the fail-closed
+    # markers below are the real guarantee.
+    esc=$(printf '%s' "$s" | head -1 | sed 's/[#&/\\]/\\&/g'); [ -n "$esc" ] && sed -i "s#${esc}#[REDACTED]#g" "$f"
   done
 done
 LEAK=0
 for f in "${PUBFILES[@]}"; do [ -f "$f" ] || continue
   for s in "${secrets[@]}"; do [ -n "$s" ] || continue
-    if grep -Fq "$s" "$f"; then log "SECRET STILL PRESENT in $f — refusing to publish"; LEAK=1; fi
+    first=$(printf '%s' "$s" | head -1)
+    if [ -n "$first" ] && grep -Fq "$first" "$f"; then log "SECRET VALUE present in $f — refusing to publish"; LEAK=1; fi
   done
+  # (b) fail closed on ANY private-key material, whatever its source.
+  if grep -qE 'PRIVATE KEY|BEGIN (OPENSSH|RSA|EC|DSA|PGP)' "$f"; then
+    log "PRIVATE-KEY MATERIAL in $f — refusing to publish"; LEAK=1
+  fi
 done
+if [ "$LEAK" = 0 ]; then log "secret scrub clean"; else log "secret scrub FAILED — publish blocked"; fi
 
 # --- publish to the `audits` branch ----------------------------------------
 publish() {
