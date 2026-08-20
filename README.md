@@ -6,24 +6,31 @@
 </p>
 <br/>
 <p align="center">
-    <a href="https://github.com/fort-nix/nix-bitcoin/actions" target="_blank">
-        <img src="https://github.com/fort-nix/nix-bitcoin/actions/workflows/test.yml/badge.svg?branch=master"
-             alt="Github Actions status">
+    <a href="https://github.com/ostermayer/nix-bitcoin/actions/workflows/test.yml" target="_blank">
+        <img src="https://github.com/ostermayer/nix-bitcoin/actions/workflows/test.yml/badge.svg?branch=release"
+             alt="CI status (release)">
     </a>
-    <a href="https://github.com/fort-nix/nix-bitcoin/releases/latest" target="_blank">
-        <img src="https://img.shields.io/github/v/release/fort-nix/nix-bitcoin" alt="GitHub tag (latest SemVer)">
-    </a>
-    <a href="https://github.com/fort-nix/nix-bitcoin/commits/master" target="_blank">
-        <img src="https://img.shields.io/github/commit-activity/y/fort-nix/nix-bitcoin" alt="GitHub commit activity">
-    </a>
-    <a href="https://github.com/fort-nix/nix-bitcoin/graphs/contributors" target="_blank">
-        <img src="https://img.shields.io/github/contributors-anon/fort-nix/nix-bitcoin" alt="GitHub contributors">
-    </a>
-    <a href="https://github.com/fort-nix/nix-bitcoin/releases" target="_blank">
-        <img src="https://img.shields.io/github/downloads/fort-nix/nix-bitcoin/total" alt="GitHub downloads">
+    <a href="https://github.com/ostermayer/nix-bitcoin/releases/latest" target="_blank">
+        <img src="https://img.shields.io/github/v/tag/ostermayer/nix-bitcoin?label=release" alt="Latest release tag">
     </a>
 </p>
 <br/>
+
+> ### Maintained fork
+>
+> This is an **independently maintained fork** of
+> [fort-nix/nix-bitcoin](https://github.com/fort-nix/nix-bitcoin), which reached
+> **end of life** at `v0.0.139` (2026-08): the upstream repo is archived and
+> receives no further updates or security fixes. Because nix-bitcoin pins its
+> **entire nixpkgs** (kernel, sshd, tor, openssl, …), that freeze would strand
+> security updates for anyone still on it — so this fork continues maintenance.
+>
+> It is **trimmed to a subset of upstream's services** (see below) and is driven
+> by the maintainer's own production fleet. It is offered in good faith and
+> **without warranty**; review it yourself before trusting funds to it. Not
+> affiliated with or endorsed by the original nix-bitcoin developers — do not
+> send them reports or donations on this fork's behalf (see
+> [SECURITY.md](SECURITY.md)).
 
 nix-bitcoin is a collection of Nix packages and NixOS modules for easily installing **full-featured Bitcoin nodes** with an emphasis on **security**.
 
@@ -33,6 +40,43 @@ nix-bitcoin can be used for personal or merchant wallets, public infrastructure 
 for Bitcoin application backends. In all cases, the aim is to provide security and
 privacy by default. However, while nix-bitcoin is used in production today, it is
 still considered experimental.
+
+What this fork changes
+---
+- **Trimmed to the services we run and test:** `bitcoind`, `lnd`
+  (+ `lndinit`, `lndconnect`), `electrs`, `btcpayserver` + `nbxplorer`, plus the
+  infrastructure modules (operator, secrets, onion services, netns-isolation,
+  nodeinfo, backups, presets). Removed: clightning (+ plugins), joinmarket, RTL,
+  mempool, fulcrum, liquid, lightning-loop/pool, charge-lnd, hardware-wallets.
+  Enabling a removed service gives a clear eval error. Tag `v0.0.139` is the last
+  revision with the full upstream service set.
+- **We own the nixpkgs pin now.** Security bumps for kept packages land as
+  version-guarded overrides in `pkgs/overrides.nix` (inert once the pin catches
+  up). The pin is moved deliberately and tested (below).
+- **Every change is tested before `release` moves:** the full NixOS VM assertion
+  suite (`default`/`regtest`/`netns`) runs in CI on KVM, plus a weekly
+  [CVE scan](.github/workflows/cve-scan.yml) of the shipped closure. All commits
+  are signed; the `release` branch only advances on green CI.
+
+Using this fork
+---
+Pin the **`release`** branch — it only ever points at a CI-validated, tagged
+snapshot. Flake input:
+
+```nix
+inputs.nix-bitcoin.url = "github:ostermayer/nix-bitcoin/release";
+```
+
+Optional: our binary cache serves the CI-built closures, so you skip local
+recompiles.
+
+```nix
+nix.settings = {
+  extra-substituters = [ "https://ostermayer.cachix.org" ];
+  extra-trusted-public-keys =
+    [ "ostermayer.cachix.org-1:Pllh4qnP/CkBt+XhIPyT3mMZ/3tnEdcAiSgV/KSqvUk=" ];
+};
+```
 
 nix-bitcoin nodes can be deployed on dedicated hardware, virtual machines or containers.
 The Nix packages and NixOS modules can be used independently and combined freely.
@@ -102,6 +146,6 @@ See [dev/README](./dev/README.md).
 
 Troubleshooting
 ---
-If you are having problems with nix-bitcoin check the [FAQ](docs/faq.md) or submit an issue.\
-There's also a Matrix room at [#general:nixbitcoin.org](https://matrix.to/#/#general:nixbitcoin.org).\
-We are always happy to help.
+If you are having problems with this fork, check the [FAQ](docs/faq.md) or open an
+issue on **this** repository. The upstream Matrix room and nixbitcoin.org
+channels belong to the original project and do not cover this fork.

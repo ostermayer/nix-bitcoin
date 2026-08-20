@@ -1,0 +1,14 @@
+version: 2
+updates:
+  # Keep GitHub Actions current and SHA-pinned. Our CI is part of the trust
+  # chain for everyone who pins this fork, so a compromised action is a
+  # supply-chain risk. Dependabot bumps the pinned SHA + version comment when
+  # an action releases, and surfaces security advisories against actions.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "ci"
+    labels:
+      - dependencies

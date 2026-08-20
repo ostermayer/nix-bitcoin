@@ -1,0 +1,66 @@
+name: Release tag
+
+# Every push to `release` is a fleet-validated snapshot (the branch ruleset only
+# accepts commits with all CI checks green). Tag those snapshots so advisories,
+# users, and downstream pins can name a version instead of a bare commit hash.
+#
+# CalVer (YYYY.MM.DD[.N]): for a security-sensitive fork, "how fresh is this
+# pin" is the question a version should answer, and it never collides with
+# upstream's frozen v0.0.x line. Only closure-affecting pushes are tagged;
+# CI/docs-only fast-forwards are skipped.
+on:
+  push:
+    branches: [release]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-tag
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - name: Tag and release if the closure changed
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          prev=$(git describe --tags --abbrev=0 --match '20*' 2>/dev/null || echo "")
+
+          # Skip when nothing closure-affecting changed since the last release.
+          if [ -n "$prev" ]; then
+            if git diff --quiet "$prev"..HEAD -- modules pkgs overlay.nix default.nix flake.nix flake.lock; then
+              echo "No closure-affecting change since $prev — not tagging."
+              exit 0
+            fi
+          fi
+
+          date=$(date -u +%Y.%m.%d)
+          tag=$date; n=1
+          while git rev-parse -q --verify "refs/tags/$tag" >/dev/null; do
+            n=$((n+1)); tag="$date.$n"
+          done
+
+          {
+            echo "Fleet-validated snapshot of the maintained nix-bitcoin fork."
+            echo
+            echo "## nixpkgs pins"
+            for inp in nixpkgs nixpkgs-unstable; do
+              rev=$(jq -r ".nodes.\"$inp\".locked.rev // empty" flake.lock)
+              [ -n "$rev" ] && echo "- \`$inp\`: $rev"
+            done
+            echo
+            echo "## Changes since ${prev:-the beginning}"
+            if [ -n "$prev" ]; then git log --no-merges --pretty='- %s' "$prev"..HEAD; else echo "- initial tagged release"; fi
+          } > notes.md
+
+          git tag -a "$tag" -m "Release $tag"
+          git push origin "refs/tags/$tag"
+          gh release create "$tag" --title "$tag" --notes-file notes.md
+          echo "Released $tag"
