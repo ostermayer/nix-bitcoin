@@ -27,7 +27,7 @@ REPO_HTTPS="https://github.com/ostermayer/nix-bitcoin.git"
 REPO_SSH="git@github.com:ostermayer/nix-bitcoin.git"
 DEPLOY_KEY="${FORK_AUDIT_KEY:-$HOME/.ssh/id_ed25519_forkautotest}"
 SIGN_KEY="${FORK_AUDIT_SIGN_KEY:-$HOME/.ssh/id_ed25519_forkautotest_sign}"
-THINK="${FORK_AUDIT_THINK:-high}"
+THINK="${FORK_AUDIT_THINK:-medium}"   # high wanders to ~40min/model; medium is the reliable default
 TOOLS="read,bash,grep,git_status,git_diff,git_log,web_search,web_fetch"   # read-only
 REF="${1:-origin/release}"; shift || true
 MODELS=("$@"); [ ${#MODELS[@]} -gt 0 ] || MODELS=(kimi-k3 glm-5p2)
