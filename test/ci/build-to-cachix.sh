@@ -7,7 +7,7 @@
 set -euo pipefail
 
 CACHIX_SIGNING_KEY="${CACHIX_SIGNING_KEY:-}"
-cachixCache=nix-bitcoin
+cachixCache=ostermayer
 
 trap 'echo "Error at ${BASH_SOURCE[0]}:$LINENO"' ERR
 
@@ -34,7 +34,7 @@ if [[ -v GITHUB_ACTIONS ]]; then
     cachix use "$cachixCache"
 fi
 
-if [[ $CACHIX_SIGNING_KEY ]]; then
+if [[ ${CACHIX_SIGNING_KEY:-}${CACHIX_AUTH_TOKEN:-} ]]; then
     # Speed up task by uploading store paths as soon as they are created
     buildCmd="cachix watch-exec $cachixCache nix -- build"
 else
@@ -43,7 +43,7 @@ fi
 
 $buildCmd --out-link "$tmpDir/result" --print-build-logs "$drv^*"
 
-if [[ $CACHIX_SIGNING_KEY ]]; then
+if [[ ${CACHIX_SIGNING_KEY:-}${CACHIX_AUTH_TOKEN:-} ]]; then
     cachix push "$cachixCache" "$outPath"
 fi
 

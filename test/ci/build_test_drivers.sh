@@ -3,7 +3,7 @@ set -euo pipefail
 
 cd "${BASH_SOURCE[0]%/*}"
 
-cachixCache=nix-bitcoin
+cachixCache=ostermayer
 
 # Declare variables for shellcheck
 driverDrvs=()
@@ -47,7 +47,7 @@ if [[ -v GITHUB_ACTIONS ]]; then
     cachix use "$cachixCache"
 fi
 
-if [[ $CACHIX_SIGNING_KEY ]]; then
+if [[ ${CACHIX_SIGNING_KEY:-}${CACHIX_AUTH_TOKEN:-} ]]; then
     # Speed up task by uploading store paths as soon as they are created
     buildCmd="cachix watch-exec $cachixCache nix -- build"
 else
@@ -56,6 +56,6 @@ fi
 
 $buildCmd --no-link --print-build-logs "${driverDrvs[@]}"
 
-if [[ $CACHIX_SIGNING_KEY ]]; then
+if [[ ${CACHIX_SIGNING_KEY:-}${CACHIX_AUTH_TOKEN:-} ]]; then
     cachix push "$cachixCache" "${drivers[@]}"
 fi
