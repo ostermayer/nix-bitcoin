@@ -1,0 +1,63 @@
+I've completed the audit. Summary of the investigation before the findings:
+
+## Surface map and what I checked
+
+**Read end-to-end (fork's own code):** `modules/` — bitcoind, lnd, electrs, btcpayserver/nbxplorer, lndconnect, backups, nodeinfo, operator, security (D-Bus policy), netns-isolation, onion-services, onion-addresses, secrets/secrets.nix, all presets (secure-node, hardened, hardened-extended, enable-tor, wireguard, bitcoind-remote), deployment/krops+nixops, versioning/obsolete-options; `pkgs/` — lib.nix hardening helpers, netns-exec C source, lndinit, nbxplorer, overrides, nixpkgs-pinned, krops pin; `helper/` and `test/ci/` scripts; CI workflows; examples and docs.
+
+**Verification methods:** diffed every kept module against archived upstream `fort-nix/nix-bitcoin` to isolate fork deltas (nearly all are genuine tightenings); evaluated a full config (`bitcoind+lnd+electrs+btcpayserver+lnd-backend`) with `nix eval` and inspected the resolved systemd units to confirm `defaultHardening` actually merges (`NoNewPrivileges`, `ProtectSystem=strict`, `PrivateUsers`, `PrivateTmp` all present on funds services) and that no secret value reaches a store path (all `$(cat ${secretsDir}/…)` uses are runtime `preStart`, configs in the store carry only paths); recomputed umask math on the new lnd macaroon staging (0440 owner-only, root-only staging dir, atomic rename — the symlink race is closed); traced the onion-addresses root script (the residual `-L`-then-`install` TOCTOU has no attacker payoff: tor plants the symlink but the copy lands readable only by the target service/operator, so I dropped it); checked `netns-exec` (owner-only 0500, fscaps → AT_SECURE neutralizes `LD_*`, absolute-path exec, caps dropped before exec).
+
+**Prior-audit fix verification:** the 2026-08-14 audit's claimed fixes (M-2/M-3/M-4/M-6, L-6/L-8/L-11) are all real and complete in the code. The cookie group grant (L-10) is explicitly documented as accepted design.
+
+## Findings
+
+The one substantive defect: the fork hardened its code and explicitly refuses to fetch upstream releases ("would silently ship un-fixed code"), yet its own user-facing onboarding (flake templates, examples README, install doc) still points new users at the archived `fort-nix/nix-bitcoin` — which permanently lacks every fix this fork shipped (clightning-rest `0.0.0.0` admin API, lndconnect admin rebind, the RPC DoS whitelist, nbxplorer 2.6.10, the macaroon races). A user following the fork's own docs gets the unpatched upstream.
+
+```json
+[
+  {
+    "id": "onboarding-pins-archived-upstream",
+    "title": "Fork's own flake templates and install docs pin the archived, unpatched upstream (fort-nix) instead of this fork",
+    "severity": "medium",
+    "category": "supply-chain",
+    "component": "examples/docs onboarding",
+    "file": "examples/flakes/flake.nix",
+    "line": 11,
+    "evidence": "inputs.nix-bitcoin.url = \"github:fort-nix/nix-bitcoin/release\";  (also examples/container/flake.nix:13, examples/README.md:10 `nix run github:fort-nix/nix-bitcoin/release`, examples/README.md:21 and docs/install.md:213 `git clone https://github.com/fort-nix/nix-bitcoin`) — while helper/fetch-release refuses the same repo: \"This repository is a maintained FORK; upstream's release artifacts do NOT contain this fork's fixes, so fetching them here would silently ship un-fixed code\" and prescribes `github:ostermayer/nix-bitcoin/release`",
+    "attack_scenario": "New user finds this fork (the maintained one), copies its primary template examples/flakes/flake.nix or follows docs/install.md step 1. They silently deploy archived upstream master: clightning-rest bound to 0.0.0.0 with RPCCOMMANDS=[\"*\"] (full wallet withdraw API on all interfaces if enabled), lndconnect rebinding lnd's admin REST to 0.0.0.0 without onion, the DoS-able public RPC whitelist (scantxoutset/getblocktemplate), nbxplorer 2.6.7 (BTCPay security advisory), the onion-addresses root symlink-follow, and the clboss 0.16.1 fund-theft version in the stale nixpkgs pin. A network attacker then exercises those known bugs, e.g. `withdraw` via an exposed clightning-rest, ending in fund theft. No attacker action on this repo is needed; the fork's own docs deliver the victim to the vulnerable code.",
+    "impact": "funds (known upstream fund-theft/admin-exposure bugs re-shipped to this fork's users), dos, secrets",
+    "confidence": 0.9,
+    "false_positive_risk": "Only if the fort-nix references are deliberate (e.g. maintainers intend templates to point upstream until their own release branch is trusted). But helper/fetch-release explicitly calls fetching upstream a silent-ship of un-fixed code, so the templates contradict the fork's stated stance. No runtime exploit in this repo itself; impact is realized only when a user onboards via these files.",
+    "recommendation": "Point all user-facing refs at the fork: `github:ostermayer/nix-bitcoin/release` in examples/flakes/flake.nix, examples/container/flake.nix, examples/README.md, and the clone URL in docs/install.md. Grep `fort-nix` in CI to keep it from regressing."
+  },
+  {
+    "id": "btcpayserver-nbxplorer-group-write",
+    "title": "btcpayserver joins nbxplorer's group, granting write access to nbxplorer's whole data dir (only needs to read one cookie file)",
+    "severity": "low",
+    "category": "privesc",
+    "component": "modules/btcpayserver.nix",
+    "file": "modules/btcpayserver.nix",
+    "line": 250,
+    "evidence": "users.users.${cfg.btcpayserver.user} = { ... extraGroups = [ cfg.nbxplorer.group ]; ... } combined with systemd.tmpfiles.rules: \"d '${cfg.nbxplorer.dataDir}' 0770 ${cfg.nbxplorer.user} ${cfg.nbxplorer.group} - -\" (group rwx) and btcexplorercookiefile=${cfg.nbxplorer.dataDir}/.../.cookie",
+    "attack_scenario": "Attacker exploits btcpayserver (internet-facing web app; the 2.4.2 unauthenticated-macaroon-theft advisory shows this class is real) and runs code as the btcpayserver user. Via group nbxplorer they can unlink/replace files in /var/lib/nbxplorer despite file-level 0600 perms: delete the Main/.cookie and DB (availability), or replace settings.config so the next nbxplorer start uses attacker-chosen bind/btcrpcurl (integrity/DoS). They cannot escalate further: nbxplorer holds no keys, the bitcoind RPC password for the btcpayserver user was already readable to them via the same group, and postgres peer-auth as the nbxplorer OS user is not obtainable. Payoff is limited to destroying/corrupting the watch-only indexer that btcpayserver depends on.",
+    "impact": "dos (cross-service), minor integrity tampering",
+    "confidence": 0.8,
+    "false_positive_risk": "Inherited unchanged from upstream nix-bitcoin, and the cookie must be group-readable by design; only the directory-wide rwx is the over-grant. Exploit requires a btcpayserver RCE first, at which point the marginal gain is small.",
+    "recommendation": "Have nbxplorer stage the cookie (or a copy) into a btcpayserver-readable 0440 file at a dedicated path (same pattern as /run/lnd macaroons) and drop btcpayserver from group nbxplorer; or set the data dir 0750 and ACL-read the cookie only."
+  },
+  {
+    "id": "nodeinfo-onion-adresses-typo",
+    "title": "nodeinfo checks a misspelled unit name 'onion-adresses', making its failure guard dead code",
+    "severity": "info",
+    "category": "other",
+    "component": "modules/nodeinfo.nix",
+    "file": "modules/nodeinfo.nix",
+    "line": 68,
+    "evidence": "if is_enabled(\"onion-adresses\") and not is_active(\"onion-adresses\"):\n        print(\"error: service 'onion-adresses' is not running\")\n        exit(1)   # actual unit is onion-addresses.service",
+    "attack_scenario": "None with security payoff: when onion-addresses.service is enabled but failed, nodeinfo prints per-service read errors instead of the intended clear fatal message. Operator-UX defect only; is_enabled on the misspelled name always returns false so the guard never fires.",
+    "impact": "none (cosmetic; fails open to a slightly worse error message)",
+    "confidence": 0.95,
+    "false_positive_risk": "None; the typo is unambiguous. Reported as info per the brief's evidence discipline.",
+    "recommendation": "Fix the spelling to 'onion-addresses' in all three occurrences."
+  }
+]
+```

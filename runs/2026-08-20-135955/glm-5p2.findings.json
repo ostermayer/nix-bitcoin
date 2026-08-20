@@ -1,0 +1,32 @@
+[
+  {
+    "id": "wireguard-lnd-rest-0.0.0.0-no-firewall-assert",
+    "title": "WireGuard preset binds lnd admin REST to 0.0.0.0 without asserting the firewall that gates it",
+    "severity": "low",
+    "category": "network-exposure",
+    "component": "modules/presets/wireguard.nix",
+    "file": "modules/presets/wireguard.nix",
+    "line": 172,
+    "evidence": "    # This is safe because the listen ports are secured by the firewall.\n    services.lnd = mkIf lndconnect {\n      restAddress = \"0.0.0.0\";\n      tor.enforce = false;\n    };  -- and the only assertion, at lines 100-101, is: assertion = !(config.nix-bitcoin.netns-isolation.enable or false);",
+    "attack_scenario": "Attacker starts with network reachability to the node (LAN or a public interface). The operator enables nix-bitcoin.wireguard with lnd.lndconnect (for a Zeus-style mobile wallet) in a config where networking.firewall.enable is false (the preset asserts netns-incompatibility but never asserts the firewall). lnd's REST API, which authorizes via the admin macaroon, binds 0.0.0.0:8080, so it is reachable on every host interface, not just the WireGuard subnet. The attacker can TLS-handshake and exercise the lnd REST attack surface. Direct fund theft is blocked by lnd's macaroon auth, so reaching the funds-theft goal requires chaining an lnd REST vulnerability (e.g. an auth-bypass CVE in the pinned lnd); absent that, the payoff is lnd REST attack-surface exposure and a privacy regression (tor.enforce is also disabled, so lnd peer traffic is clearnet).",
+    "impact": "rce/funds (only via a chained lnd REST vuln); privacy; dos",
+    "confidence": 0.4,
+    "false_positive_risk": "NixOS networking.firewall defaults to enabled and the secure-node preset sets it explicitly, so the exposure requires an explicit user opt-out; and lnd REST requires a macaroon, so there is no direct fund-theft path without an additional lnd bug. The preset is documented to rely on the firewall, so a maintainer may consider this accepted rather than a defect.",
+    "recommendation": "Add an assertion in modules/presets/wireguard.nix that networking.firewall.enable is true (mirroring the existing netns assertion), or replace the single 0.0.0.0 restlisten with explicit binds to the WireGuard serverAddress and 127.0.0.1 (the latter is needed for the rootScript macaroon-creation curl) so exposure does not depend on the firewall at all."
+  },
+  {
+    "id": "public-rpc-whitelist-signing-oracles-for-caller-keys",
+    "title": "Public bitcoind RPC whitelist grants signmessagewithprivkey/signrawtransactionwithkey (caller-key signing oracles, no local consumer)",
+    "severity": "info",
+    "category": "rpc-whitelist",
+    "component": "modules/bitcoind-rpc-public-whitelist.nix",
+    "file": "modules/bitcoind-rpc-public-whitelist.nix",
+    "line": 81,
+    "evidence": "  \"signrawtransactionwithkey\"\n...\n  \"signmessagewithprivkey\"",
+    "attack_scenario": "No attack path. The 'public' RPC user is the credential shared by lnd, electrs and nbxplorer. Both methods are signing oracles for caller-supplied private keys: the caller already holds the key it asks bitcoind to sign with, so they reveal no bitcoind-held secret and grant no capability the caller lacks. None of lnd/electrs/nbxplorer call them (lnd has its own signer; electrs only reads blocks). Filed as info only because the whitelist is the documented security boundary and these entries handle private-key material, so a reviewer tightening the boundary would want them gone; they are not a vulnerability.",
+    "impact": "none (no path)",
+    "confidence": 0.6,
+    "false_positive_risk": "The maintainers visibly curated this whitelist (extensive comments, fundrawtransaction/getblockfrompeer/scantxoutset removed in be5e094) and may have kept these two deliberately because they are harmless; reporting them could read as second-guessing a correct, deliberate decision.",
+    "recommendation": "Drop signmessagewithprivkey and signrawtransactionwithkey from the public whitelist unless a local service is shown to need them."
+  }
+]

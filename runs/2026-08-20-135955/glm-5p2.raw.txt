@@ -1,0 +1,52 @@
+## Investigation summary
+
+**Attack surface mapped.** I read every module (`bitcoind`, `lnd`, `electrs`, `btcpayserver`/`nbxplorer`, `lndconnect`, `operator`, `secrets/secrets.nix`, `netns-isolation`, `security`, `onion-services`, `onion-addresses`, `nodeinfo`, `backups`, presets), `pkgs/lib.nix` (the hardening helper), the packaging (`lndinit`, `nbxplorer`, `netns-exec`, `krops`, `nixops`, `fetch-node-modules`, pinning), the deployment modules, and the test suite. I focused where funds/keys/root are reachable: lnd macaroon + seed handling, the bitcoind RPC whitelist + cookie group path, the onion-addresses symlink-privesc surface, secret permissions, and the netns privilege boundary.
+
+**What I checked and ruled out (with reasoning):**
+
+- **Secrets in the Nix store / ps-visible.** All embedded passwords are read at runtime via `$(cat ${secretsDir}/...)` into runtime config files (`lnd.conf` 600, `bitcoin.conf` 640, `electrs.toml` in a 0770 dataDir, `settings.config` 600). The store-resident `bitcoin.conf`/`lnd.conf` contain only paths and HMAC *verifiers*, never plaintext passwords. The `rpcauth.py` argv leak (audit L-6) is genuinely fixed: the password is read inside the python process and reassigned to `sys.argv` after exec, so it never reaches the OS cmdline.
+- **lnd macaroon symlink race (commit b2eb47f/9b71bec).** Re-read carefully. The root `ExecStartPost` stages in a root-only `mktemp -d` (0700) on the same tmpfs and finishes with `mv -f` (rename(2), doesn't follow the destination symlink). A compromised lnd owns `/run/lnd` (711) but cannot enter staging, and the worst it can do at the destination is plant a dir (DoS of its own macaroon, no escalation, lnd already generated the macaroon). Solid.
+- **onion-addresses symlink privesc.** The root script refuses symlinked hostname sources, builds each output dir as root:root 0700, populates, then `chown -h` last; `rm -rf -- ./*` doesn't follow symlinks; the StateDirectory is 0771 root:root so non-root can't plant entries. The only actor who can swap a source is tor, and the exfiltrated file lands owned by a user tor can't read. Not exploitable.
+- **RPC whitelist.** `rpcwhitelistdefault=0` + `public` has an explicit tight whitelist; `privileged` (no whitelist) is operator/cookie-only. No wallet/`stop`/`importprivkey`/`sendtoaddress`/`fundrawtransaction`/`getblockfrompeer` in the public list (the DoS/eclipse methods were dropped, commit be5e094). Verified the test asserts `public` cannot call `stop`.
+- **Cookie group-read (audit L-10).** `postStart` chmods `.cookie` g=r (640) for group `bitcoin`. Grepped every `extraGroups`: only the operator joins `bitcoin` (and `lnd`); lnd/electrs/nbxplorer/btcpayserver use `bitcoinrpc-public`. No service reaches the privileged cookie. By design.
+- **Cross-service secret reads.** Each secret is owned by its service user at 440 (cert 444, public-password group `bitcoinrpc-public`). No service joins another service's secret group except the intentional `nbxplorer`↔`btcpay` sharing, which is same-whitelist. The `secretsDir` is 0751 (traversable, not listable); individual files are locked.
+- **Supply chain.** lndinit/nbxplorer use pinned `fetchFromGitHub` + vendor/nuget hashes; nixpkgs pins come from `flake.lock` narHash; krops pins a commit (not a re-targetable tag); `helper/fetch-release` refuses upstream tarballs unless explicitly overridden. No impure/unpinned fetchers, no untrusted IFD.
+- **Ordering as a security property.** btcpayserver omits `nix-bitcoin-secrets.target` from `after`, but is transitively ordered after it via `nbxplorer.service`/`lnd.service` (both `after` the secrets target); systemd `After=` is transitive. lnd's `wants` (not `requires`) bitcoind avoids the cascade-stop class.
+- **netns-exec wrapper.** Operator-only (500), allowlisted netns, absolute-path exec, caps dropped before `execv`; no UID change, so no escalation beyond what the trusted operator already has.
+
+**What survived as real (if limited):** the WireGuard preset binds lnd's admin-macaroon REST API to `0.0.0.0` and relies on the NixOS firewall to scope it to the WG subnet, but unlike its netns-incompatibility guard it never asserts the firewall is enabled. Plus one honest info-level over-grant in the public whitelist.
+
+```json
+[
+  {
+    "id": "wireguard-lnd-rest-0.0.0.0-no-firewall-assert",
+    "title": "WireGuard preset binds lnd admin REST to 0.0.0.0 without asserting the firewall that gates it",
+    "severity": "low",
+    "category": "network-exposure",
+    "component": "modules/presets/wireguard.nix",
+    "file": "modules/presets/wireguard.nix",
+    "line": 172,
+    "evidence": "    # This is safe because the listen ports are secured by the firewall.\n    services.lnd = mkIf lndconnect {\n      restAddress = \"0.0.0.0\";\n      tor.enforce = false;\n    };  -- and the only assertion, at lines 100-101, is: assertion = !(config.nix-bitcoin.netns-isolation.enable or false);",
+    "attack_scenario": "Attacker starts with network reachability to the node (LAN or a public interface). The operator enables nix-bitcoin.wireguard with lnd.lndconnect (for a Zeus-style mobile wallet) in a config where networking.firewall.enable is false (the preset asserts netns-incompatibility but never asserts the firewall). lnd's REST API, which authorizes via the admin macaroon, binds 0.0.0.0:8080, so it is reachable on every host interface, not just the WireGuard subnet. The attacker can TLS-handshake and exercise the lnd REST attack surface. Direct fund theft is blocked by lnd's macaroon auth, so reaching the funds-theft goal requires chaining an lnd REST vulnerability (e.g. an auth-bypass CVE in the pinned lnd); absent that, the payoff is lnd REST attack-surface exposure and a privacy regression (tor.enforce is also disabled, so lnd peer traffic is clearnet).",
+    "impact": "rce/funds (only via a chained lnd REST vuln); privacy; dos",
+    "confidence": 0.4,
+    "false_positive_risk": "NixOS networking.firewall defaults to enabled and the secure-node preset sets it explicitly, so the exposure requires an explicit user opt-out; and lnd REST requires a macaroon, so there is no direct fund-theft path without an additional lnd bug. The preset is documented to rely on the firewall, so a maintainer may consider this accepted rather than a defect.",
+    "recommendation": "Add an assertion in modules/presets/wireguard.nix that networking.firewall.enable is true (mirroring the existing netns assertion), or replace the single 0.0.0.0 restlisten with explicit binds to the WireGuard serverAddress and 127.0.0.1 (the latter is needed for the rootScript macaroon-creation curl) so exposure does not depend on the firewall at all."
+  },
+  {
+    "id": "public-rpc-whitelist-signing-oracles-for-caller-keys",
+    "title": "Public bitcoind RPC whitelist grants signmessagewithprivkey/signrawtransactionwithkey (caller-key signing oracles, no local consumer)",
+    "severity": "info",
+    "category": "rpc-whitelist",
+    "component": "modules/bitcoind-rpc-public-whitelist.nix",
+    "file": "modules/bitcoind-rpc-public-whitelist.nix",
+    "line": 81,
+    "evidence": "  \"signrawtransactionwithkey\"\n...\n  \"signmessagewithprivkey\"",
+    "attack_scenario": "No attack path. The 'public' RPC user is the credential shared by lnd, electrs and nbxplorer. Both methods are signing oracles for caller-supplied private keys: the caller already holds the key it asks bitcoind to sign with, so they reveal no bitcoind-held secret and grant no capability the caller lacks. None of lnd/electrs/nbxplorer call them (lnd has its own signer; electrs only reads blocks). Filed as info only because the whitelist is the documented security boundary and these entries handle private-key material, so a reviewer tightening the boundary would want them gone; they are not a vulnerability.",
+    "impact": "none (no path)",
+    "confidence": 0.6,
+    "false_positive_risk": "The maintainers visibly curated this whitelist (extensive comments, fundrawtransaction/getblockfrompeer/scantxoutset removed in be5e094) and may have kept these two deliberately because they are harmless; reporting them could read as second-guessing a correct, deliberate decision.",
+    "recommendation": "Drop signmessagewithprivkey and signrawtransactionwithkey from the public whitelist unless a local service is shown to need them."
+  }
+]
+```
