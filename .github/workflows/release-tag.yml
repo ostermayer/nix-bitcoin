@@ -31,6 +31,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           prev=$(git describe --tags --abbrev=0 --match '20*' 2>/dev/null || echo "")
 
           # Skip when nothing closure-affecting changed since the last release.
