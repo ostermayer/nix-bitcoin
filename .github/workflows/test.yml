@@ -2,6 +2,9 @@ name: nix-bitcoin tests
 
 on:
   push:
+    # Code branches only. The `audits` branch carries generated LLM-audit
+    # transcripts, not code — running the VM suite on it would be pure waste.
+    branches: [master, release]
   pull_request:
   workflow_dispatch:
 
