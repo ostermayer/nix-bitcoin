@@ -1,0 +1,62 @@
+[
+  {
+    "id": "lnd-macaroon-root-symlink-clobber",
+    "title": "Root lnd ExecStartPost writes/chowns through attacker-controlled symlinks in lnd-owned /run/lnd",
+    "severity": "medium",
+    "category": "privesc",
+    "component": "modules/lnd.nix",
+    "file": "modules/lnd.nix",
+    "line": 274,
+    "evidence": "RuntimeDirectory = \"lnd\"; RuntimeDirectoryMode = \"711\"; ... script = nbLib.rootScript \"lnd-create-macaroons\" '' ... macaroonPath=\"$RUNTIME_DIRECTORY/${macaroon}.macaroon\" ... ${pkgs.jq}/bin/jq -c '.macaroon' | ${pkgs.xxd}/bin/xxd -p -r > \"$macaroonPath\"\n chown ${cfg.macaroons.${macaroon}.user}: \"$macaroonPath\"",
+    "attack_scenario": "Attacker with code execution as the lnd user (remote lnd RCE). RuntimeDirectory /run/lnd is owned by lnd (mode 711), so the attacker replaces /run/lnd/btcpayserver.macaroon with a symlink to an arbitrary root-owned path, then crashes lnd; Restart=on-failure re-runs ExecStartPost. That command is nbLib.rootScript, i.e. prefixed with '+' (pkgs/lib.nix:88), so it runs as root with User= AND all sandboxing (ProtectSystem=strict etc.) lifted. The shell redirect '> $macaroonPath' follows the symlink and truncates/writes the target as root (arbitrary file clobber: /etc/passwd, /etc/nix-bitcoin-secrets/lnd-wallet-password, bitcoind state, backups), and 'chown user:' without -h chowns the symlink target to the macaroon's configured user (btcpayserver), handing a network-facing service user ownership of an arbitrary file. Payoff: node destruction / funds-lockout DoS beyond the service sandbox, and a chown primitive that chains with a btcpayserver compromise to full file access.",
+    "impact": "dos (node/funds destruction as root) + privesc primitive chained via arbitrary chown; breaches the sandbox boundary the hardening is meant to enforce",
+    "confidence": 0.85,
+    "false_positive_risk": "Mechanism verified against systemd semantics ('+' disables sandboxing; RuntimeDirectory owned by service User). Content written is an uncontrolled random macaroon, so direct RCE is not possible — impact is clobber/chown, hence medium not high. If cfg.macaroons is empty (no btcpayserver lnd backend) the loop body never runs.",
+    "recommendation": "Don't write as root into a service-owned directory. Write via install(1) which unlinks the destination first (e.g. 'install -m 440 -o <user> /dev/stdin \"$macaroonPath\"'), or set RuntimeDirectory ownership to root (RuntimeDirectoryMode with a root-owned dir and group-readable files), or add 'chown -h' and an explicit 'test ! -L' guard mirroring the onion-addresses M-4 fix."
+  },
+  {
+    "id": "btcpayserver-rpc-setban-eclipse",
+    "title": "btcpayserver-reachable bitcoind RPC user retains setban, enabling peer-eclipse from a web-app compromise",
+    "severity": "medium",
+    "category": "rpc-whitelist",
+    "component": "modules/btcpayserver.nix",
+    "file": "modules/btcpayserver.nix",
+    "line": 110,
+    "evidence": "rpcwhitelist = cfg.bitcoind.rpc.users.public.rpcwhitelist ++ [\n  \"setban\"\n  \"generatetoaddress\"\n];",
+    "attack_scenario": "Attacker remotely compromises btcpayserver (internet-facing .NET app; the class has had critical auth-bypass CVEs, e.g. the 2.4.2 macaroon-theft advisory). The btcpayserver user is in group nbxplorer (btcpayserver.nix:237 extraGroups), and the secret 'bitcoin-rpcpassword-btcpayserver' is group nbxplorer mode 440 under the 0751-traversable secretsDir, so the attacker reads the RPC password. In the default non-netns layout the attacker then calls bitcoind RPC on 127.0.0.1:8332 and uses whitelisted 'setban' to ban every honest peer reported by whitelisted 'getpeerinfo'/'getnodeaddresses' (long bantime, subnets), while the attacker's Sybil peers on the network absorb the freed slots. With bitcoind eclipsed, the attacker feeds a fake chain to nbxplorer/btcpayserver and double-spends on-chain payments the merchant accepts as confirmed; lnd's on-chain view degrades too. Payoff: funds (payment fraud) / dos.",
+    "impact": "funds (double-spend of accepted on-chain payments) and privacy/dos via peer manipulation; needs the btcpayserver-RCE precondition plus Sybil peers",
+    "confidence": 0.55,
+    "false_positive_risk": "setban may be required by nbxplorer's node-management behavior (grant is inherited from upstream, and the fork deliberately curated this whitelist in 9b73b2d/dd7582f), so removing it might break an nbxplorer feature — needs verification against NBXplorer source. Full eclipse is nontrivial against bitcoind's outbound-peer eviction and anchors; netns-isolation mode blocks btcpayserver->bitcoind RPC at the netns firewall, limiting the scenario to nbxplorer compromise there.",
+    "recommendation": "Drop 'setban' (and 'generatetoaddress', regtest-only) from the btcpayserver RPC user unless nbxplorer provably needs them; if needed, prefer a dedicated nbxplorer RPC user whose credentials the btcpayserver user cannot read (separate group), so web-app compromise no longer yields P2P-control RPC."
+  },
+  {
+    "id": "onion-addresses-toctou-symlink",
+    "title": "onion-addresses: check-then-install TOCTOU on tor-controlled hostname files still allows a root symlink read",
+    "severity": "low",
+    "category": "file-perms",
+    "component": "modules/onion-addresses.nix",
+    "file": "modules/onion-addresses.nix",
+    "line": 93,
+    "evidence": "if [[ -L $src ]]; then\n  echo \"Error: refusing to read onion hostname via symlink: $src\" >&2\n  exit 1\nfi\ninstall -T -m 400 \"$src\" \"$dst\"",
+    "attack_scenario": "Attacker who has compromised the tor user (controls /var/lib/tor/onion/<svc>/, 0700 tor). The root 'onion-addresses' service (CAP_DAC_OVERRIDE/CAP_DAC_READ_SEARCH/CAP_CHOWN) tests '[[ -L $src ]]' and then, in a separate syscall sequence, 'install' opens the same path. By racing a swap of 'hostname' between a regular file and a symlink (e.g. to /etc/shadow or /var/lib/lnd/.../admin.macaroon) across the check/open gap, the attacker gets root to copy the target into /var/lib/onion-addresses/<user>/<svc> with mode 400 owned by an unprivileged user. Payoff: secret exfiltration (macaroon/wallet material) to a low-priv context. Each tor restart grants one attempt window, which bounds reliability.",
+    "impact": "secrets exfiltration via root read gadget; precondition is tor compromise plus winning a tight race",
+    "confidence": 0.5,
+    "false_positive_risk": "The gap between the -L test and install's open() is microseconds and the service runs once per tor start, so the race may be impractical; the M-4 fix (8c2c342) already closed the non-raced variant and all chowns use -h. May reasonably be considered residual hardening rather than exploitable.",
+    "recommendation": "Eliminate the check/open gap: open with O_NOFOLLOW (e.g. 'install' from an already-opened fd, or copy via 'cp --no-dereference' + fstat verification), or have tor write hostnames to a root-owned staging dir, or read the hostname with the tor user's privileges instead of root."
+  },
+  {
+    "id": "fetch-release-targets-upstream",
+    "title": "fork's release tooling and docs still fetch/clone upstream fort-nix/nix-bitcoin, silently discarding fork security fixes",
+    "severity": "low",
+    "category": "supply-chain",
+    "component": "helper/fetch-release",
+    "file": "helper/fetch-release",
+    "line": 9,
+    "evidence": "repo=fort-nix/nix-bitcoin  (also helper/push-release.sh:4 REPO=fort-nix/nix-bitcoin; docs/install.md:213 and examples/README.md:10,21 instruct 'git clone https://github.com/fort-nix/nix-bitcoin' / 'nix run github:fort-nix/nix-bitcoin/release', while README.md:67 uses github:ostermayer/nix-bitcoin/release)",
+    "attack_scenario": "Not attacker-driven, but a live downgrade channel: a fork user following docs/install.md or running helper/fetch-release 'upgrades' to upstream fort-nix releases. The GPG check passes (pinned key 36C7...0366 is the upstream maintainer's), so nothing warns the user that they have left the fork and redeployed unmaintained upstream code — reintroducing every issue the fork fixed (M-2 lndconnect 0.0.0.0 rebind, M-4 onion symlink, L-8 wireguard root re-exec, trimmed packages' known CVEs such as clboss 0.16.1 fund theft if the user enables those services). Payoff for an opportunistic attacker: users running code with known, documented vulnerabilities who believe they run the hardened fork.",
+    "impact": "dos/secrets/funds indirectly: silent downgrade to unmaintained upstream that reintroduces known-exploitable modules",
+    "confidence": 0.9,
+    "false_positive_risk": "If the fork intentionally keeps upstream as its release source (push-release.sh also targets fort-nix), this is a deliberate publishing arrangement rather than a bug — but README badges/releases point at ostermayer/nix-bitcoin, indicating the tooling is stale, not intentional.",
+    "recommendation": "Point helper/fetch-release, helper/push-release.sh, docs/install.md and examples/README.md at the fork's repository and its own signing key; fail loudly if the fetched release's repo/signing identity differs from the fork's."
+  }
+]

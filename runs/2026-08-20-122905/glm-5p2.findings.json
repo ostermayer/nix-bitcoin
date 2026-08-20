@@ -1,0 +1,32 @@
+[
+  {
+    "id": "shared-public-rpc-user-topology-leak",
+    "title": "The 'public' bitcoind RPC user is shared by lnd locally and intended for public exposure, so its getpeerinfo/getnodeaddresses leak peer topology and the documented mitigation breaks lnd",
+    "severity": "low",
+    "category": "rpc-whitelist",
+    "component": "modules/bitcoind-rpc-public-whitelist.nix + modules/bitcoind.nix + modules/lnd.nix",
+    "file": "modules/bitcoind-rpc-public-whitelist.nix",
+    "line": 53,
+    "evidence": "  \"getpeerinfo\"       # lnd (chain-backend health check), nbxplorer\n\nwith lnd.nix:179: `bitcoind.rpcuser=${bitcoind.rpc.users.public.name}` and bitcoind.nix:376 `rpcwhitelist = mkDefault (import ./bitcoind-rpc-public-whitelist.nix);` assigned to rpc.users.public",
+    "attack_scenario": "The 'public' RPC user exists to be exposed (e.g. via a reverse proxy for a public block explorer or remote client) - that is the whole point of a separately-named public user with a curated whitelist. An attacker holding the public credentials (anyone the operator gave them to, or anyone reaching a proxy that forwards them) calls getpeerinfo and getnodeaddresses and recovers the node's full peer set and advertised addresses, deanonymizing the operator and their peering graph (attacker goal #4). The audit resolution says 'narrow the whitelist in your own config' to mitigate, but because lnd authenticates to bitcoind as this same public user (lnd.conf: bitcoind.rpcuser=public), removing getpeerinfo/getnodeaddresses from the public whitelist also breaks lnd's chain-backend health check. The suggested mitigation is in direct tension with lnd's requirement; the real fix is a separate local-only RPC user for lnd with the topology methods, distinct from the publicly-exposed user.",
+    "impact": "privacy (peer-topology leak / deanonymization) under the documented public-exposure use case",
+    "confidence": 0.55,
+    "false_positive_risk": "By default the public user is bound to 127.0.0.1 / a netns address and not exposed, so there is no leak without an operator config choice. The maintainers explicitly documented keeping these methods as a deliberate tradeoff (audit M-3 resolution). The finding rests on the premise that exposing this user is an intended use, which the name and whitelist curation support but is not forced.",
+    "recommendation": "Give lnd its own local RPC user (e.g. rpc.users.lnd) whose whitelist includes getpeerinfo/getnodeaddresses, and keep the 'public' user's whitelist without them so it can be safely exposed. Decouple the local-service credential from the public-facing one."
+  },
+  {
+    "id": "btcpayserver-rpc-setban-overgrant",
+    "title": "btcpayserver RPC user (used by nbxplorer) is granted setban and generatetoaddress, neither needed, enabling eclipse-DoS of bitcoind if nbxplorer is compromised",
+    "severity": "low",
+    "category": "rpc-whitelist",
+    "component": "modules/btcpayserver.nix",
+    "file": "modules/btcpayserver.nix",
+    "line": 110,
+    "evidence": "          rpcwhitelist = cfg.bitcoind.rpc.users.public.rpcwhitelist ++ [\n            \"setban\"\n            \"generatetoaddress\"\n          ];",
+    "attack_scenario": "nbxplorer authenticates to bitcoind as the 'btcpayserver' RPC user (nbxplorer settings.config: btcrpcuser=btcpayserver) and, via netns-isolation, is one of the few services with a network path to bitcoind's RPC port. An attacker who compromises nbxplorer (or any holder of the btcpayserver RPC password, which is readable by group nbxplorer = nbxplorer + btcpayserver) gains setban, which nbxplorer never needs for its indexing function. They call `setban 0.0.0.0/0 add` to evict/ban all of bitcoind's peers, eclipsing the node; an eclipsed bitcoind can be fed a false chain view, enabling double-spends of payments btcpayserver already accepted as confirmed, or a plain block-propagation DoS (attacker goals #1/#5). generatetoaddress is mainnet-disabled (regtest only), so it is harmless in production but is still unnecessary surface.",
+    "impact": "funds (double-spend of accepted btcpayserver payments via eclipse) and DoS, chained on a prior nbxplorer compromise",
+    "confidence": 0.35,
+    "false_positive_risk": "Exploitation requires first compromising nbxplorer, which by default binds only localhost / a netns address and has no public network exposure, so the precondition is itself hard to meet and the incremental risk setban adds over the base nbxplorer compromise is modest. This grant is inherited unchanged from upstream nix-bitcoin (commit 15b574f), not introduced by the fork, though it lives in the fork's in-scope module.",
+    "recommendation": "Drop setban and generatetoaddress from the btcpayserver RPC user's whitelist (nbxplorer only needs the read-only blockchain/peer-query methods already in the public list). If regtest block generation is needed for tests, grant it only under config.services.bitcoind.regtest."
+  }
+]
