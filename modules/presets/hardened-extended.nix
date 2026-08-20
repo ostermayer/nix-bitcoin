@@ -53,7 +53,7 @@
     "net.ipv4.tcp_timestamps" = "0";
 
     # Disable core dumps
-    "syskernel.core_pattern" = "|/bin/false";
+    "kernel.core_pattern" = "|/bin/false";
     "fs.suid_dumpable" = "0";
 
     # Only swap when absolutely necessary
