@@ -82,8 +82,8 @@ let
             exec(make_info, globals(), locals())
             infos[service] = info
 
-    if is_enabled("onion-adresses") and not is_active("onion-adresses"):
-        print("error: service 'onion-adresses' is not running")
+    if is_enabled("onion-addresses") and not is_active("onion-addresses"):
+        print("error: service 'onion-addresses' is not running")
         exit(1)
 
     ${concatStrings infos}
