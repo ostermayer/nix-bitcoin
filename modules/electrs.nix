@@ -67,7 +67,13 @@ in {
 
     systemd.services.electrs = {
       wantedBy = [ "multi-user.target" ];
-      requires = [ "bitcoind.service" ];
+      # `wants`, not `requires`: electrs tolerates its bitcoind backend going
+      # away and reconnects on its own. A hard `requires` meant every bitcoind
+      # restart cascade-stopped electrs, and `nixos-rebuild switch` did not
+      # bring it back — Electrum clients stayed cut off until a manual start.
+      # `after` still orders electrs behind bitcoind at boot; `wants` pulls
+      # bitcoind in without the cascade-stop. Mirrors the lnd fix (8aa7f5e).
+      wants = [ "bitcoind.service" ];
       after = [ "bitcoind.service" "nix-bitcoin-secrets.target" ];
       preStart = ''
         echo "auth = \"${bitcoind.rpc.users.public.name}:$(cat ${secretsDir}/bitcoin-rpcpassword-public)\"" \
