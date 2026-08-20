@@ -40,7 +40,7 @@ set +a
 ALERT_TO="${ALERT_TO:-dan@ostermayer.co}"
 ALERT_FROM="${ALERT_FROM:-NullR fork-audit <hi@lnzap.org>}"
 have() { command -v "$1" >/dev/null; }
-JQ() { nix --extra-experimental-features "nix-command flakes" shell --inputs-from "$SRC" nixpkgs#jq -c -- jq "$@" 2>/dev/null; }
+JQ() { jq "$@"; }   # native jq (present on pop-os and CI); nix-shell wrapping ate the args
 
 STAMP="$(date +%F-%H%M%S)"
 OUT="$WORK/reports/$STAMP"; SRC="$WORK/src"
