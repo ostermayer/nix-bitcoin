@@ -210,7 +210,7 @@ You can also build Nix from source by following the instructions at https://nixo
 1. Clone this project
 
     ```
-    git clone https://github.com/fort-nix/nix-bitcoin
+    git clone https://github.com/ostermayer/nix-bitcoin
     ```
 
 2. Create a new directory for your nix-bitcoin node config and copy initial files from nix-bitcoin
