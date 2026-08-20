@@ -1,0 +1,63 @@
+## Summary of the audit
+
+I mapped the full attack surface: `modules/` (16 modules + presets + secrets + deployment), `pkgs/` (lib.nix hardening, netns-exec C wrapper, lndinit/nbxplorer packaging, fetchers), and `helper/` scripts. This fork has already had a serious audit pass (commits `e66c00a`, `8c2c342`, `6379e34`, etc.), and it shows: secrets are referenced by runtime path only, never interpolated into the store; the rpcauth password is passed via file, not argv; the onion-addresses symlink race is properly fixed (root-owned population, `chown -h`, symlink refusal); the lndconnect 0.0.0.0 footgun was removed; netns-exec validates its netns whitelist, requires absolute exec paths, and drops caps before exec; the lnd/electrs `requires` cascade was fixed with `wants`.
+
+Things I checked and cleared: setup-secrets permission logic (dir 0751 + per-file 0440/owner is sound, no symlink window since the dir is root-only), bitcoind/lnd/nbxplorer/electrs preStart secret handling (all runtime-path reads, files 0600/0640 in 0770 dirs), nixops `chmod o+x` (per-file perms backstop it), the krops activation script (fail-closed, no injection), macaroon creation via fd-passed admin macaroon (correct), backups (encrypted, root-only passphrase), supply chain (all fetchers hash-pinned, krops pinned to a commit), and the netns iptables rules (fail-closed INPUT, correct allowlist).
+
+Three findings remain, none critical:
+
+1. **`setban` on the btcpayserver/nbxplorer RPC user** (btcpayserver.nix). The module itself documents the whitelist safety bar as "no P2P side effects" for the public user, then grants this user `setban`. A compromised nbxplorer is already a *whitelisted P2P peer* (it connects via `btcnodeendpoint` on `whitelistedPort`); combined with `setban` to knock out the node's honest outbound peers, that is a practical eclipse path against the bitcoind backing a funds-holding lnd. NBXplorer needs `getpeerinfo` (already inherited); I found no evidence it needs `setban` on modern bitcoind.
+
+2. **`fundrawtransaction` in the public RPC whitelist.** It's a wallet method; the whitelist file's stated bar is "no leaks of wallet contents." bitcoind here is built/run with wallet support enabled (the module's `disablewallet` defaults to null), so if an operator ever loads a wallet via the privileged user, every holder of the public credentials (lnd, electrs, nbxplorer, i.e. any one compromised service) can enumerate wallet UTXOs and change addresses through crafted `fundrawtransaction` calls. Privacy leak only; signing/spending methods are not whitelisted.
+
+3. **netns mode exposes unauthenticated ZMQ (and the Tor SOCKS port) to every local user via the bridge IP.** `rpc.allowip` and the netns INPUT chain both allow `bridgeIp`, which is the source address of *any* host-local process reaching the netns. RPC is still auth-gated, but ZMQ (`tcp://169.254.1.12:28332/28333`) has no auth, so any unprivileged local user can subscribe to the node's raw block/tx stream, and any local user can use the node's Tor SOCKS at `169.254.1.10:9050`. Small privacy exposure, fail-open in the wrong direction.
+
+```json
+[
+  {
+    "id": "nbxplorer-setban-eclipse",
+    "title": "btcpayserver RPC user is granted setban, enabling peer-eclipse DoS from a compromised nbxplorer",
+    "severity": "medium",
+    "category": "rpc-whitelist",
+    "component": "modules/btcpayserver.nix",
+    "file": "modules/btcpayserver.nix",
+    "line": 105,
+    "evidence": "rpcwhitelist = cfg.bitcoind.rpc.users.public.rpcwhitelist ++ [\n  \"setban\"\n  \"generatetoaddress\"\n];",
+    "attack_scenario": "Attacker compromises the nbxplorer service (a network-facing .NET indexer that parses untrusted chain data) or otherwise obtains the bitcoin-rpcpassword-btcpayserver secret (group nbxplorer). nbxplorer already connects to bitcoind as a *whitelisted P2P peer* (btcnodeendpoint=whitelistedPort) and holds RPC credentials. The attacker calls setban to mass-ban subnets covering the node's honest outbound peers; bitcoind drops and will not reconnect to them. With honest peers gone, the attacker (already a whitelisted inbound peer) controls the victim's view of the chain. Against a node running lnd with real channel balances, a sustained eclipse enables LN attacks that depend on hiding or delaying justice/closing transactions. Payoff: fund-theft enabler plus direct DoS on the funds node.",
+    "impact": "dos (chain-view eclipse of a Lightning node; escalation path toward funds)",
+    "confidence": 0.55,
+    "false_positive_risk": "An older NBXplorer version may have legitimately called setban for misbehaving peers; I could not confirm a current need (the module comment only justifies getpeerinfo, which is inherited from the public whitelist). Banning all peers also requires the attacker to choose subnets carefully since bitcoind rejects some bans, and bitcoind may evict rather than fully isolate. If setban is genuinely required by nbxplorer this is a no-op finding.",
+    "recommendation": "Drop \"setban\" (and the mainnet-useless \"generatetoaddress\") from the btcpayserver user's rpcwhitelist unless a concrete NBXplorer code path requires it; if it does, scope a comment explaining why, as was done for getpeerinfo."
+  },
+  {
+    "id": "public-whitelist-fundrawtransaction",
+    "title": "fundrawtransaction in the public RPC whitelist leaks loaded-wallet UTXOs and change addresses",
+    "severity": "low",
+    "category": "rpc-whitelist",
+    "component": "modules/bitcoind-rpc-public-whitelist.nix",
+    "file": "modules/bitcoind-rpc-public-whitelist.nix",
+    "line": 50,
+    "evidence": "\"fundrawtransaction\"",
+    "attack_scenario": "Precondition: the operator loads a wallet into bitcoind via the privileged RPC user (the module ships wallet support enabled; services.bitcoind.disablewallet defaults to null and no preset sets it). Attacker compromises any single local service holding the public credentials (lnd, electrs, or nbxplorer, all in group bitcoinrpc-public reading /etc/nix-bitcoin-secrets/bitcoin-rpcpassword-public). The attacker calls fundrawtransaction on the /wallet/<name> endpoint (wallet RPCs are gated by rpcwhitelist, and this method is in it) with crafted outputs, causing bitcoind to perform coin selection over the wallet and return which UTXOs it controls plus a fresh change address. Repeating with different amounts enumerates the wallet. The whitelist file's own stated safety bar is 'no leaks of wallet contents'; this violates it. No theft: signrawtransactionwithwallet/sendtoaddress are not whitelisted and signrawtransactionwithkey needs the caller's own keys.",
+    "impact": "privacy (wallet UTXO/balance disclosure to any compromised local service)",
+    "confidence": 0.7,
+    "false_positive_risk": "Only exploitable when the operator actively loads a bitcoind wallet, which this stack discourages; with no wallet loaded the call returns an error. The entry is inherited from upstream nix-bitcoin's list, so it may be deliberate for watch-only-ish workflows, but it contradicts the file's documented safety bar.",
+    "recommendation": "Remove \"fundrawtransaction\" from the public whitelist (operators who need it can grant it per the file's own instructions), or set services.bitcoind.disablewallet = true by default so the wallet surface is unreachable regardless."
+  },
+  {
+    "id": "netns-bridge-zmq-exposure",
+    "title": "In netns-isolation mode, unauthenticated bitcoind ZMQ and the Tor SOCKS port are reachable by any local user via the bridge IP",
+    "severity": "info",
+    "category": "network-exposure",
+    "component": "modules/netns-isolation.nix",
+    "file": "modules/netns-isolation.nix",
+    "line": 238,
+    "evidence": "rpc.allowip = [\n  bridgeIp # For operator user\n  netns.bitcoind.address\n] ++ ...; and setupInNetns: ${iptables} -w -A INPUT -s ${allowedAddresses} -j ACCEPT  (allowedAddresses includes bridgeIp); services.tor.client.socksListenAddress.addr = bridgeIp",
+    "attack_scenario": "With netns-isolation enabled, any unprivileged local process (e.g. a compromised non-service user or a sandbox-escaped daemon) connects from the host to 169.254.1.12:28332/28333; its source address is the bridge IP, which is in both bitcoind's rpcallowip-style firewall allowlist and the netns INPUT allowlist. ZMQ has no authentication, so the attacker subscribes to the node's raw block and mempool transaction stream (a privacy/self-transaction-correlation leak). The same bridge trust lets any local user use the node's Tor SOCKS (169.254.1.10:9050, opened by networking.firewall.interfaces.nb-br.allowedTCPPorts) and i2p SAM, blending their traffic with the node's Tor identity. RPC ports remain credential-gated, so impact stops at privacy.",
+    "impact": "privacy (mempool/tx-stream observation; shared Tor egress identity)",
+    "confidence": 0.6,
+    "false_positive_risk": "Host-to-bridge traffic may be further restricted by the NixOS firewall for the ZMQ ports (only 9050 and the SAM port are explicitly opened on nb-br; bitcoind's ZMQ port is not in allowedTCPPorts, so the host firewall may already drop it, leaving only the in-netns rule irrelevant). If the default NixOS INPUT policy covers nb-br for those ports, only the intentionally-opened Tor SOCKS/i2p exposure remains, which is arguably by design for netns clients.",
+    "recommendation": "Bind bitcoind's ZMQ to the netns address only and drop bridgeIp from the ZMQ path (or confirm and document that the host firewall blocks host-origin traffic to netns service ports other than the explicitly opened Tor SOCKS/SAM ports); consider binding tor socksListenAddress per-netns or noting the local-user exposure in the netns-isolation option description."
+  }
+]
+```
