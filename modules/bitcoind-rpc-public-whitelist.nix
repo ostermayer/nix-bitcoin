@@ -7,6 +7,11 @@
 # - scantxoutset, gettxoutsetinfo, getblocktemplate: minutes-scale CPU,
 #   trivially abused for DoS by any holder of the public credentials.
 # - getblockfrompeer: lets the caller drive the node's P2P block fetching.
+# - fundrawtransaction: operates on a loaded bitcoind wallet — it selects and
+#   locks UTXOs and reveals change/wallet contents, violating the wallet-safety
+#   bar above. No local consumer (lnd, electrs, nbxplorer) uses it; lnd/nbxplorer
+#   manage their own wallets and electrs only reads blocks. Removed in the audit
+#   follow-up 2026-08-20.
 # If you need any of these, grant them via
 # `services.bitcoind.rpc.users.public.rpcwhitelist` in your own config.
 #
@@ -62,7 +67,6 @@
   "decoderawtransaction"
   "decodescript"
   "finalizepsbt"
-  "fundrawtransaction"
   "getrawtransaction"
   "joinpsbts"
   "sendrawtransaction"

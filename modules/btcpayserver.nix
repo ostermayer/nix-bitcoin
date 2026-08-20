@@ -107,10 +107,16 @@ in {
       enable = true;
       rpc.users.btcpayserver = {
         passwordHMACFromFile = true;
-        rpcwhitelist = cfg.bitcoind.rpc.users.public.rpcwhitelist ++ [
-          "setban"
-          "generatetoaddress"
-        ];
+        # nbxplorer/btcpayserver need only the read/relay calls in the public
+        # whitelist. The former `setban` + `generatetoaddress` extras were
+        # over-grants for the RPC user reachable from the internet-facing
+        # btcpayserver: setban lets a web-app compromise eclipse the node
+        # (persistent peer bans), and generatetoaddress burns CPU via `maxtries`
+        # on mainnet and is regtest-only otherwise. Neither is used by nbxplorer,
+        # btcpayserver, or the test suite. Removed in the audit follow-up
+        # 2026-08-20; if you run btcpay in regtest and want its "mine" button,
+        # grant generatetoaddress in your own config.
+        rpcwhitelist = cfg.bitcoind.rpc.users.public.rpcwhitelist;
         # Note: nbxplorer's Indexer.ConnectNode needs getpeerinfo — it is in the
         # public whitelist (which this inherits), because lnd needs it too. See
         # modules/bitcoind-rpc-public-whitelist.nix.
