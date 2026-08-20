@@ -7,6 +7,21 @@ scriptDir=$(cd "${BASH_SOURCE[0]%/*}" && pwd)
 trap 'echo "Error at ${BASH_SOURCE[0]}:$LINENO"' ERR
 
 repo=fort-nix/nix-bitcoin
+
+# This legacy helper fetches an UPSTREAM (fort-nix) signed release tarball. This
+# repository is a maintained FORK; upstream's release artifacts do NOT contain
+# this fork's fixes, so fetching them here would silently ship un-fixed code.
+# Consume this fork via its flake pin instead:
+#   inputs.nix-bitcoin.url = "github:ostermayer/nix-bitcoin/release";
+# Refuse to run unless explicitly overridden.
+if [[ ! -v NIX_BITCOIN_FETCH_UPSTREAM ]]; then
+    echo "This is a fork of nix-bitcoin; pin the flake, don't fetch releases:" >&2
+    echo "  inputs.nix-bitcoin.url = \"github:ostermayer/nix-bitcoin/release\";" >&2
+    echo "This helper fetches UPSTREAM ($repo) releases, WITHOUT the fork's fixes." >&2
+    echo "Set NIX_BITCOIN_FETCH_UPSTREAM=1 only if you truly want upstream." >&2
+    exit 1
+fi
+
 if [[ ! -v version ]]; then
     version=$(curl -fsS "https://api.github.com/repos/$repo/releases/latest" | jq -r '.tag_name' | tail -c +2)
 fi
