@@ -14,14 +14,15 @@ env:
 # Compared to launching a separate build job for each VM test, this avoids duplicated
 # builds of derivations that the test drivers have in common.
 #
-# The job matrix `test_scenario` runs the VM tests.
-# When job `build_test_drivers` determines that all tests have already been built successfully,
-# job `test_scenario` is skipped via output variable `run_scenario_tests`.
+# The job matrix `test_scenario` runs the VM tests. Scenario jobs ALWAYS run —
+# build-to-cachix.sh early-exits green when a scenario's result is already in
+# the binary cache — so every push reports a real conclusion for all five
+# checks. (A job-level skip leaves the matrix contexts unreported, and the
+# release branch ruleset then blocks fast-forwards forever with
+# "required status checks are expected".)
 jobs:
   build_test_drivers:
     runs-on: ubuntu-latest
-    outputs:
-      run_scenario_tests: ${{ steps.main.outputs.run_scenario_tests }}
     steps:
       - uses: actions/checkout@v4
       - uses: cachix/install-nix-action@v31
@@ -45,7 +46,6 @@ jobs:
           - regtest
           - netns
     needs: build_test_drivers
-    if: needs.build_test_drivers.outputs.run_scenario_tests == 'true'
     steps:
       - uses: actions/checkout@v4
       # VM tests run QEMU inside the Nix build sandbox and need /dev/kvm
