@@ -6,12 +6,8 @@
 
 set -euo pipefail
 
-# GitHub defines env vars for missing secrets as EMPTY strings; cachix errors
-# on an empty CACHIX_SIGNING_KEY ("A signing key must not be empty") instead of
-# falling back to CACHIX_AUTH_TOKEN. Drop empty credentials entirely.
-[[ ${CACHIX_SIGNING_KEY:-} ]] || unset CACHIX_SIGNING_KEY
-[[ ${CACHIX_AUTH_TOKEN:-} ]] || unset CACHIX_AUTH_TOKEN
-cachixCache=ostermayer
+CACHIX_SIGNING_KEY="${CACHIX_SIGNING_KEY:-}"
+cachixCache=nix-bitcoin
 
 trap 'echo "Error at ${BASH_SOURCE[0]}:$LINENO"' ERR
 
@@ -38,7 +34,7 @@ if [[ -v GITHUB_ACTIONS ]]; then
     cachix use "$cachixCache"
 fi
 
-if [[ ${CACHIX_SIGNING_KEY:-}${CACHIX_AUTH_TOKEN:-} ]]; then
+if [[ $CACHIX_SIGNING_KEY ]]; then
     # Speed up task by uploading store paths as soon as they are created
     buildCmd="cachix watch-exec $cachixCache nix -- build"
 else
@@ -47,7 +43,7 @@ fi
 
 $buildCmd --out-link "$tmpDir/result" --print-build-logs "$drv^*"
 
-if [[ ${CACHIX_SIGNING_KEY:-}${CACHIX_AUTH_TOKEN:-} ]]; then
+if [[ $CACHIX_SIGNING_KEY ]]; then
     cachix push "$cachixCache" "$outPath"
 fi
 
