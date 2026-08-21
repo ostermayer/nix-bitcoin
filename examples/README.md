@@ -10,7 +10,7 @@ nix-bitcoin QEMU VM:
 nix run github:ostermayer/nix-bitcoin/release
 ```
 The VM (defined in [flake.nix](../flake.nix)) runs in the terminal and has `bitcoind`
-and `clightning` installed.\
+and `lnd` installed.\
 It leaves no traces (outside of `/nix/store`) on the host system.
 
 
@@ -25,7 +25,7 @@ nix-shell
 
 The following example scripts set up a nix-bitcoin node according to [`./configuration.nix`](configuration.nix) and then
 shut down immediately. They leave no traces (outside of `/nix/store`) on the host system.\
-By default, [`./configuration.nix`](configuration.nix) enables `bitcoind` and `clightning`.
+By default, [`./configuration.nix`](configuration.nix) enables `bitcoind` and `lnd`.
 
 - [`./deploy-container.sh`](deploy-container.sh) creates a [NixOS container](https://github.com/erikarvstedt/extra-container).\
   This is the fastest way to set up a node.\
@@ -72,6 +72,6 @@ Requires: A systemd-based Linux distro and root privileges.
 
 ### Extending nix-bitcoin with Flakes
 
-The [mempool extension flake](https://github.com/fort-nix/nix-bitcoin-mempool) shows how to define new
-pkgs and modules in a Flake.\
-Since mempool is now a core nix-bitcoin module, this Flake just serves as an example.
+The [nix-bitcoin-mempool extension flake](https://github.com/fort-nix/nix-bitcoin-mempool) shows how to
+define new pkgs and modules in a Flake and add them to a nix-bitcoin node.\
+This is also how you can add back a service that this fork's trimmed module set doesn't include.

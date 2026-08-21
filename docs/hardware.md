@@ -5,7 +5,7 @@ Hardware requirements
 * Disk space: 1 TB for an unpruned
   instance of Bitcoin Core.
   * This can be significantly lowered by enabling pruning.
-    Note: Pruning is not supported by `electrs` and `fulcrum`.
+    Note: Pruning is not supported by `electrs`.
 
 Tested low-end hardware includes:
 - [Raspberry Pi 4](https://www.raspberrypi.org/products/raspberry-pi-4-model-b/)
