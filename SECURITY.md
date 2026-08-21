@@ -57,6 +57,16 @@ Known findings and their status are tracked in
 [docs/security-audit-2026-08-14.md](docs/security-audit-2026-08-14.md). The
 audit is re-run on every nixpkgs pin update.
 
+## Adversarial review
+
+Beyond CI's NixOS VM assertion suite, every change is reviewed by two
+independent open-weight models (Kimi K3 + GLM-5.2) acting as adversarial
+security auditors, at max reasoning. The **methodology, the audit tooling, and
+the full results of every run** live on the [`audits`](../../tree/audits)
+branch — kept off `master`/`release` so the code you pin stays clean. Browse it
+to follow the reviews, read the raw transcripts, or run the suite yourself;
+PRs to improve the audit prompt are welcome.
+
 ## Release Integrity
 
 Commits and tags on this fork are signed with the maintainer's SSH key.
