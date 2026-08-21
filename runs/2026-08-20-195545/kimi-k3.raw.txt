@@ -1,0 +1,63 @@
+## Audit summary
+
+**Surface mapped.** The fork is a trimmed nix-bitcoin: `modules/` (bitcoind, lnd, electrs, btcpayserver/nbxplorer, secrets, onion-addresses/onion-services, netns-isolation, operator, security, lndconnect, nodeinfo, backups, presets, krops/nixops deployment), `pkgs/` (lib.nix hardening helpers, the `netns-exec` cap_sys_admin wrapper, lndinit/nbxplorer packages, empty overrides.nix), `helper/` scripts, `audits/run.sh`, and three CI workflows. I focused on the funds-reachable paths: secrets handling, lnd's macaroon/seed flow, the RPC whitelist, the root-privileged onion-addresses copier, and the tor→service trust boundary.
+
+**Verified clean (hypotheses disproved by reading):**
+- **Secrets in store**: every secret is referenced by runtime path and read via `$(cat /etc/nix-bitcoin-secrets/...)` in preStart scripts, never interpolated at eval time. `lnd.conf`/`settings.config` are `install -m600`; the rpcauth password is passed via file, not argv.
+- **lnd macaroon staging** (`lnd.nix` ExecStartPost): root-only `mktemp -d` staging on the same tmpfs + atomic rename into `/run/lnd`; a symlink planted by the lnd user at the destination is replaced, not followed. The `+` prefix bypassing `PrivateUsers=` is consistent with onion-addresses needing an explicit `PrivateUsers=false` (its main ExecStart can't use `+`), and the flow is CI-tested.
+- **RPC whitelist**: public list has no wallet/stop/import calls; `signrawtransactionwithkey` takes keys as args only; `rpcwhitelistdefault=0` correctly leaves `privileged`/cookie unrestricted (bitcoind semantics: `0` = unlisted users unrestricted). btcpayserver inherits the public list.
+- **netns-exec**: owner-only 0500, absolute-path execv, exact netns whitelist, caps dropped before exec.
+- **Supply chain**: all fetchers hash-pinned, nixpkgs via flake.lock narHash, GitHub Actions SHA-pinned.
+- All M-1..M-8/Low fixes from the prior audit (docs/security-audit-2026-08-14.md) are present and correct.
+
+**Findings.** The prior M-4 fix hardened onion-addresses against symlink *paths* but never validated hostname *content*, and the check-then-read structure leaves a residual race. That tor-writable content flows into three sensitive sinks, two of which reach funds. Details in the JSON.
+
+```json
+[
+  {
+    "id": "onion-hostname-content-injection",
+    "title": "Unvalidated tor-writable onion hostname content flows into bitcoin.conf/lnd.conf and the lndconnect admin-macaroon URL",
+    "severity": "high",
+    "category": "privesc",
+    "component": "onion-addresses -> bitcoind/lnd config + lndconnect",
+    "file": "modules/onion-addresses.nix",
+    "line": 96,
+    "evidence": "copyOnionFile() { ...; install -T -m 400 \"$src\" \"$dst\"; }  # copies /var/lib/tor/onion/<svc>/hostname verbatim, no content validation. Sinks: modules/onion-services.nix:100 `getPublicAddressCmd = \"cat ${config.nix-bitcoin.onionAddresses.dataDir}/services/${service}\"`; modules/bitcoind.nix:425 `echo \"externalip=$(${cfg.getPublicAddressCmd})\"` embedded raw into bitcoin.conf; modules/lnd.nix:228 same for lnd.conf; modules/lndconnect.nix:74 `--host=$(cat ${config.nix-bitcoin.onionAddresses.dataDir}/${onionService})`",
+    "attack_scenario": "Attacker achieves code execution as the `tor` user (tor is the network-facing daemon processing untrusted traffic; the fork itself treats this boundary as in-scope, cf. prior finding M-4). Precondition on the node: operator enabled `nix-bitcoin.onionServices.bitcoind.public = true` or `.lnd.public = true` (both are documented how-tos in examples/configuration.nix) or `services.lnd.lndconnect.onion = true`. (a) Config injection: attacker writes a multi-line payload to /var/lib/tor/onion/bitcoind/hostname, e.g. line 1 a plausible onion name, line 2 `shutdownnotify=/bin/sh -c '<payload>'` (not present in the generated configFile, so no precedence question; `startupnotify=` also works since bitcoind's GetArg is last-wins). The root onion-addresses service copies it verbatim to /var/lib/onion-addresses/services/bitcoind; at the next bitcoind restart (any deploy/reboot/crash) preStart splices the lines into /var/lib/bitcoind/bitcoin.conf and bitcoind executes the notify command AS THE BITCOIN USER. As `bitcoin`, the attacker reads /etc/nix-bitcoin-secrets/bitcoin-rpcpassword-privileged (0440 bitcoin:bitcoin) and the group-readable cookie, gaining full privileged bitcoind RPC: `sendtoaddress` if the operator keeps any bitcoind wallet (wallet support is on by default; disablewallet is unset), otherwise node-wide eclipse/DoS via unwhitelisted setban/addnode. The same injection into lnd.conf can repoint `bitcoind.rpchost`/`bitcoind.zmqpubrawblock` at an attacker node, eclipsing lnd's chain view (channel-fraud surface). (b) Macaroon phishing: attacker writes `attacker.example.com` to /var/lib/tor/onion/lnd-rest/hostname; it is copied to /var/lib/onion-addresses/lnd/lnd-rest; when the operator runs the documented `lndconnect` pairing command, the printed QR encodes `lndconnect://attacker.example.com:8080?macaroon=<ADMIN MACAROON>` with --nocert (no cert pinning on the onion path). The operator's wallet (Zeus) then presents the admin macaroon to the attacker's host; the attacker replays it against the real lnd-rest onion service and gets full lnd wallet admin. Payoff: goal (1) fund theft, goal (3) secret exfiltration, via a tor->bitcoin/operator privilege-boundary crossing.",
+    "impact": "funds (admin macaroon theft, privileged RPC to wallet), rce (as bitcoin user), privacy (node eclipse), dos",
+    "confidence": 0.65,
+    "false_positive_risk": "Requires a tor-user compromise first, and the public/lndconnect options enabled. I could not run bitcoind to confirm duplicate-directive precedence for startupnotify, which is why the scenario also uses shutdownnotify (not set by the module, so precedence is irrelevant). The lndconnect macaroon-in-URL flow is fully confirmed by reading the code, but the wallet-side behavior (sending the macaroon to the URL host) is inferred from how lndconnect pairing works, not tested here.",
+    "recommendation": "Validate hostname content in copyOnionFile before installing: read the file once and require an exact match (e.g. `grep -qxE '[a-z2-7]{56}\\.onion'`), failing closed otherwise. Defense in depth at the sinks: wrap the consumer substitution so only a single validated line can be emitted (e.g. `externalip=$(grep -xE ... file)`), and have lndconnect reject host values that are not the expected onion shape."
+  },
+  {
+    "id": "onion-addresses-copy-toctou",
+    "title": "check-then-read TOCTOU in onion-addresses copyOnionFile lets a tor-user swap in a symlink after the -L check, copying arbitrary root-readable files into service-owned outputs",
+    "severity": "medium",
+    "category": "file-perms",
+    "component": "modules/onion-addresses.nix",
+    "file": "modules/onion-addresses.nix",
+    "line": 92,
+    "evidence": "if [[ -L $src ]]; then\n  echo \"Error: refusing to read onion hostname via symlink: $src\" >&2\n  exit 1\nfi\ninstall -T -m 400 \"$src\" \"$dst\"",
+    "attack_scenario": "Attacker-as-tor (same precondition as the previous finding) races the window between the `[[ -L $src ]]` check and `install` opening $src: keep /var/lib/tor/onion/bitcoind/hostname a regular file for the check, then atomically rename a symlink over it pointing at e.g. /var/lib/lnd/lnd-seed-mnemonic or /etc/nix-bitcoin-secrets/lnd-wallet-password. onion-addresses runs as root with CAP_DAC_OVERRIDE, so install follows the symlink and copies the target's contents into /var/lib/onion-addresses/services/bitcoind, chowned to the bitcoin user. The window is microseconds wide, but the attacker can retry on every tor restart (onion-addresses has wantedBy/bindsTo tor.service, so crash-looping tor re-triggers it). Alone this yields nothing the tor user can read (outputs are owned by bitcoin/lnd/operator), but chained with the previous finding's code-exec-as-bitcoin, the attacker reads the copied lnd seed / wallet password from the bitcoin-owned file. Payoff: goal (1) funds via lnd seed theft. The M-4 fix closed the static-symlink case but left the race.",
+    "impact": "secrets (lnd seed, wallet password) when chained with the config-injection finding; funds downstream",
+    "confidence": 0.5,
+    "false_positive_risk": "The race window is small and I could not test winnability; it also only becomes useful when combined with a way to read a service-owned output (e.g. the previous finding). If systemd serialization or timing makes the swap impractical, this is defense-in-depth only.",
+    "recommendation": "Open the source with O_NOFOLLOW semantics instead of check-then-read: e.g. `install` is not O_NOFOLLOW-aware, so read the content via a single open (ruby/python or `bash` on a redirected fd after `stat -Lc %F` vs `%F` comparison on the opened fd, or simply `cat` after opening with `set -o noclobber`-style fd passing) and write the validated content to the destination. Validating content per the previous finding also neuters this, since a copied secret would fail the hostname format check before being installed."
+  },
+  {
+    "id": "electrs-toml-default-umask",
+    "title": "electrs.toml holding the bitcoind public RPC password is created with the service default umask (0644), relying solely on the 0770 parent dir",
+    "severity": "info",
+    "category": "file-perms",
+    "component": "modules/electrs.nix",
+    "file": "modules/electrs.nix",
+    "line": 78,
+    "evidence": "preStart = ''\n  echo \"auth = \\\"${bitcoind.rpc.users.public.name}:$(cat ${secretsDir}/bitcoin-rpcpassword-public)\\\"\" \\\n    > electrs.toml\n'';",
+    "attack_scenario": "No current attack path: /var/lib/electrs is 0770 electrs:electrs with no other group members, so the 0644 file is unreachable by other users. Unlike lnd.conf (install -m600) and nbxplorer's settings.config (install -m 600), this relies entirely on directory perms; any future change adding a member to the electrs group or relaxing the tmpfiles mode would expose the public RPC credential.",
+    "impact": "secrets (hardening gap only, no present path)",
+    "confidence": 0.9,
+    "false_positive_risk": "None on the facts; listed as info because the 0770 directory currently provides the boundary.",
+    "recommendation": "Write it with `install -m 600` like the sibling modules, so the file is safe regardless of directory-mode changes."
+  }
+]
+```

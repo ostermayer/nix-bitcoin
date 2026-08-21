@@ -1,0 +1,42 @@
+I have what I need. Here is my audit.
+
+## Audit summary
+
+**Commit audited:** `76f3b120f8aa6fb1af125b41845b3b9f9c638515` (fork of nix-bitcoin, trimmed to bitcoind, lnd, electrs, btcpayserver/nbxplorer + support infra).
+
+**Surface map.** Funds/keys reachable in: `bitcoind.nix` (wallet, RPC cookie, RPC users), `lnd.nix` (wallet seed/password, admin macaroon, TLS key), `btcpayserver.nix` (lnd macaroon, RPC creds), `secrets/secrets.nix` (all secret perms), `onion-addresses.nix` (root + DAC_OVERRIDE copier), `netns-exec` (cap_sys_admin wrapper), `operator.nix` (doas/sudo rules). I focused there.
+
+**What I checked and cleared (with evidence):**
+- **Secrets in store / argv:** No `builtins.readFile`/`fileContents` on secrets anywhere. `lnd.conf` (writeText) and nbxplorer config hold no secrets; passwords are appended at runtime. rpcauth.py takes the password via file, not argv (L-6 fix). lndinit reads seed/password from files. No `environment=` with secret values.
+- **Macaroon symlink race:** `lnd.nix` ExecStartPost stages macaroons in a root-only `mktemp -d` (0700) on the same tmpfs as `/run/lnd`, then `mv -f` (rename, atomic, doesn't follow a planted symlink). Solid (b2eb47f, 9b71bec).
+- **Onion-addresses symlink privesc:** refuses symlinked hostname files, refuses symlinked dataDir, builds per-user dirs as root:root 0700 and chowns last, `chown -h` everywhere. Solid.
+- **RPC whitelist:** public + btcpayserver users share a whitelist with no wallet/send/stop/import/DoS calls; `sendrawtransaction`/`signrawtransactionwithkey` only relay/with-caller-provided-keys. privileged user (full access) and its HMAC/password are bitcoin-group-only; no service is in `bitcoin`. Cookie (full RPC) is bitcoin-group-only → just the operator.
+- **Sandboxing:** `defaultHardening` applied to all funds services; only documented necessary weakenings (`.NET`/node JIT `MemoryDenyWriteExecute=false`; onion-addresses DAC_OVERRIDE as root). No silent `mkDefault` overrides dropping hardening.
+- **Privilege boundaries:** lnd/electrs/nbxplorer share only `bitcoinrpc-public` (whitelisted user). btcpayserver's lnd macaroon is read-only + `invoices/address:write` (no `onchain/offchain:write`) → a compromised web app cannot send funds. No service can reach another's keys.
+- **Ordering:** funds services `after nix-bitcoin-secrets.target`; wants-vs-requires changes are availability fixes that preserve boot ordering.
+- **Supply chain:** nixpkgs pinned via flake.lock narHash; lndinit/nbxplorer pinned with hashes; fetch-release refuses upstream; krops pins commit; fetch-node-modules is FOD.
+- **Network exposure:** services default to 127.0.0.1; lndconnect no longer forces 0.0.0.0 (M-2); wireguard's 0.0.0.0 is explicit + firewall-gated.
+
+The fork carries the fixes from a prior audit (L-2/L-6/L-7/L-8/L-10/L-11, M-2/M-3) plus the recent macaroon and onion hardening. It is consistently hardened.
+
+**One honest, low-confidence observation** survives, on the bitcoind RPC cookie. I'm filing it at `low` with explicit uncertainty rather than asserting, because the code gap is verifiable but the exploitability hinges on bitcoind's own cookie-creation mode, which is out of scope to verify and which I believe is almost certainly `0600`.
+
+```json
+[
+  {
+    "id": "bitcoind-cookie-other-readability-hinge",
+    "title": "postStart `chmod g=r` on .cookie does not clear other-readable bit; world-readability depends entirely on bitcoind (UMask unset by default)",
+    "severity": "low",
+    "category": "file-perms",
+    "component": "modules/bitcoind.nix (postStart / serviceConfig)",
+    "file": "modules/bitcoind.nix",
+    "line": 439,
+    "evidence": "postStart = ''\n  # NOTE: this makes the RPC cookie readable by group `bitcoin` ...\n  chmod g=r '${cfg.dataDir}/${optionalString cfg.regtest \"regtest/\"}.cookie'\n'' ...\n... UMask = mkIf cfg.dataDirReadableByGroup \"0027\";  (line 453: UMask is ONLY set when dataDirReadableByGroup is true)",
+    "attack_scenario": "The .cookie file is a bearer token for FULL privileged bitcoind RPC (no rpcwhitelist: sendtoaddress, wallet RPCs, stop, importprivkey). postStart only runs `chmod g=r`, which sets group=r but leaves the owner and OTHER permission bits untouched; it never masks other-read. The service UMask is left at systemd's default 0022 (the `UMask=0027` at line 453 is gated behind `dataDirReadableByGroup`, which is false by default). So the cookie's other-readable bit is whatever bitcoind (or an alternative `services.bitcoind.package` such as bitcoind-knots, or a future version) created it with. IF that implementation creates .cookie relying on the process umask instead of explicitly chmod-ing 0600, the cookie ends up world-readable (0644 & umask 0022), `chmod g=r` does not fix it, and ANY local user (a compromised lnd/electrs/btcpayserver/nbxplorer service user, none of which are in the `bitcoin` group) can `cat /var/lib/bitcoind/.cookie` and gain full privileged RPC. From there: drain the bitcoind wallet via sendtoaddress (wallet is enabled by default), stop the node, or interrogate wallet UTXOs. Starting access: a service-account compromise (e.g. a btcpayserver web RCE). Payoff: on-chain fund theft / DoS (attacker goal 1, 5).",
+    "impact": "funds (conditional: requires bitcoind to create .cookie without explicit 0600); dos",
+    "confidence": 0.3,
+    "false_positive_risk": "High. Bitcoin Core almost certainly creates .cookie with explicit owner-read|owner-write (0600) via fs::permissions, in which case `chmod g=r` yields 0640 (rw-r-----) and there is NO exposure. I could not verify bitcoind's cookie-creation mode from in-repo code (upstream app source is out of scope), and the upstream nix-bitcoin project has shipped this exact `chmod g=r` pattern for years without a reported world-readable-cookie vulnerability, which strongly suggests the cookie is 0600 in practice. To confirm/refute in one command on a running node: `ls -l /var/lib/bitcoind/.cookie` (expect rw-r----- = 0640; if rw-r--r-- = 0644, this finding is real and critical).",
+    "recommendation": "Stop relying on bitcoind's own file mode for the cookie's other-readability. Either set `UMask = \"0077\"` on the bitcoind service unconditionally (so no file bitcoind creates is ever other-readable, and postStart `chmod g=r` then yields a guaranteed 0640), or change postStart to an explicit `chmod 0640 '${...}.cookie'` that clears the other bits. The latter is a one-word change and removes the hinge entirely."
+  }
+]
+```

@@ -1,0 +1,17 @@
+[
+  {
+    "id": "bitcoind-cookie-other-readability-hinge",
+    "title": "postStart `chmod g=r` on .cookie does not clear other-readable bit; world-readability depends entirely on bitcoind (UMask unset by default)",
+    "severity": "low",
+    "category": "file-perms",
+    "component": "modules/bitcoind.nix (postStart / serviceConfig)",
+    "file": "modules/bitcoind.nix",
+    "line": 439,
+    "evidence": "postStart = ''\n  # NOTE: this makes the RPC cookie readable by group `bitcoin` ...\n  chmod g=r '${cfg.dataDir}/${optionalString cfg.regtest \"regtest/\"}.cookie'\n'' ...\n... UMask = mkIf cfg.dataDirReadableByGroup \"0027\";  (line 453: UMask is ONLY set when dataDirReadableByGroup is true)",
+    "attack_scenario": "The .cookie file is a bearer token for FULL privileged bitcoind RPC (no rpcwhitelist: sendtoaddress, wallet RPCs, stop, importprivkey). postStart only runs `chmod g=r`, which sets group=r but leaves the owner and OTHER permission bits untouched; it never masks other-read. The service UMask is left at systemd's default 0022 (the `UMask=0027` at line 453 is gated behind `dataDirReadableByGroup`, which is false by default). So the cookie's other-readable bit is whatever bitcoind (or an alternative `services.bitcoind.package` such as bitcoind-knots, or a future version) created it with. IF that implementation creates .cookie relying on the process umask instead of explicitly chmod-ing 0600, the cookie ends up world-readable (0644 & umask 0022), `chmod g=r` does not fix it, and ANY local user (a compromised lnd/electrs/btcpayserver/nbxplorer service user, none of which are in the `bitcoin` group) can `cat /var/lib/bitcoind/.cookie` and gain full privileged RPC. From there: drain the bitcoind wallet via sendtoaddress (wallet is enabled by default), stop the node, or interrogate wallet UTXOs. Starting access: a service-account compromise (e.g. a btcpayserver web RCE). Payoff: on-chain fund theft / DoS (attacker goal 1, 5).",
+    "impact": "funds (conditional: requires bitcoind to create .cookie without explicit 0600); dos",
+    "confidence": 0.3,
+    "false_positive_risk": "High. Bitcoin Core almost certainly creates .cookie with explicit owner-read|owner-write (0600) via fs::permissions, in which case `chmod g=r` yields 0640 (rw-r-----) and there is NO exposure. I could not verify bitcoind's cookie-creation mode from in-repo code (upstream app source is out of scope), and the upstream nix-bitcoin project has shipped this exact `chmod g=r` pattern for years without a reported world-readable-cookie vulnerability, which strongly suggests the cookie is 0600 in practice. To confirm/refute in one command on a running node: `ls -l /var/lib/bitcoind/.cookie` (expect rw-r----- = 0640; if rw-r--r-- = 0644, this finding is real and critical).",
+    "recommendation": "Stop relying on bitcoind's own file mode for the cookie's other-readability. Either set `UMask = \"0077\"` on the bitcoind service unconditionally (so no file bitcoind creates is ever other-readable, and postStart `chmod g=r` then yields a guaranteed 0640), or change postStart to an explicit `chmod 0640 '${...}.cookie'` that clears the other bits. The latter is a one-word change and removes the hinge entirely."
+  }
+]
