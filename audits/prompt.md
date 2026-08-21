@@ -75,9 +75,9 @@ system breaks:
 
 Use git history (`git log`, `git diff`) to see what changed recently and where
 regressions may hide — the trim to a service subset is a rich source of
-"removed one half of a safety invariant" bugs. Use `web_search` when you need to
-confirm an upstream advisory, a CVE, or a known-bad pattern; do not invent CVE
-numbers.
+"removed one half of a safety invariant" bugs. You have no web access; reason
+from the code itself and do not invent CVE numbers or advisories — if you can't
+confirm one from what you can read, say so rather than guessing.
 
 # Method
 

@@ -28,15 +28,21 @@ REPO_SSH="git@github.com:ostermayer/nix-bitcoin.git"
 DEPLOY_KEY="${FORK_AUDIT_KEY:-$HOME/.ssh/id_ed25519_forkautotest}"
 SIGN_KEY="${FORK_AUDIT_SIGN_KEY:-$HOME/.ssh/id_ed25519_forkautotest_sign}"
 THINK="${FORK_AUDIT_THINK:-medium}"   # high wanders to ~40min/model; medium is the reliable default
-TOOLS="read,bash,grep,git_status,git_diff,git_log,web_search,web_fetch"   # read-only
+# Read-only tools ONLY. Deliberately NO web_search/web_fetch: a fetched page
+# could prompt-inject the model, and network tools widen the exfil surface.
+TOOLS="read,bash,grep,git_status,git_diff,git_log"
 REF="${1:-origin/release}"; shift || true
 MODELS=("$@"); [ ${#MODELS[@]} -gt 0 ] || MODELS=(kimi-k3 glm-5p2)
 
 export PATH="$HOME/.npm-global/bin:/nix/var/nix/profiles/default/bin:$PATH"
-set -a
+# Load secrets as NON-exported shell vars, then export ONLY the low-impact
+# Fireworks key into the environment the sandboxed model inherits. The
+# high-impact secrets never enter the model's world: RESEND is used only in the
+# publish/email step below (run as this user, no model running), and the SSH
+# deploy/sign keys are masked from the model by the bwrap sandbox around pi.
 # shellcheck disable=SC1091  # runtime secrets file, not present at lint time
 . "$HOME/.config/fork-audit/secrets.env"
-set +a
+export FIREWORKS_API_KEY
 ALERT_TO="${ALERT_TO:-dan@ostermayer.co}"
 ALERT_FROM="${ALERT_FROM:-NullR fork-audit <hi@lnzap.org>}"
 have() { command -v "$1" >/dev/null; }
@@ -64,9 +70,22 @@ extract_json() { awk '/```json/{buf="";cap=1;next} cap&&/```/{last=buf;cap=0;nex
 for m in "${MODELS[@]}"; do
   mid="accounts/fireworks/models/$m"; raw="$OUT/$m.raw.txt"; fj="$OUT/$m.findings.json"
   log "=== $m ==="
+  # Run the model inside a bwrap sandbox: whole fs read-only, but the SSH
+  # deploy/sign keys and the secrets file are masked with empty tmpfs, so the
+  # model's bash tool cannot read or exfiltrate them. Network stays shared (pi
+  # must reach Fireworks); the only secret reachable is the low-impact Fireworks
+  # key in the env (bound it with a Fireworks spend cap). Session writes go to
+  # an ephemeral tmpfs; ~/.pi config stays read-only so a run can't tamper with
+  # your interactive pi. This sandbox wraps ONLY the audit's pi call.
   ( cd "$SRC" && timeout "${FORK_AUDIT_TIMEOUT:-3600}" \
-      pi -p --provider fireworks --model "$mid:$THINK" --tools "$TOOLS" \
-         --append-system-prompt "$PROMPT" "$TASK" ) > "$raw" 2> "$OUT/$m.stderr" \
+      bwrap \
+        --ro-bind / / --dev /dev --proc /proc --bind /tmp /tmp \
+        --tmpfs "$HOME/.ssh" \
+        --tmpfs "$HOME/.config/fork-audit" \
+        --overlay-src "$HOME/.pi/agent" --tmp-overlay "$HOME/.pi/agent" \
+        --chdir "$SRC" \
+        -- pi -p --provider fireworks --model "$mid:$THINK" --tools "$TOOLS" \
+             --append-system-prompt "$PROMPT" "$TASK" ) > "$raw" 2> "$OUT/$m.stderr" \
     || log "$m exited nonzero (partial output kept)"
   extract_json "$raw" > "$fj"
   if have jq && jq -e . "$fj" >/dev/null 2>&1; then log "$m: $(jq 'length' "$fj") findings"; else log "$m: no parseable JSON"; echo '[]' > "$fj"; fi
@@ -95,36 +114,41 @@ corrob=$(JQ '[group_by(.file+"|"+(.title//""))[]|select(length>1)]|length' "$MER
 } > "$REPORT"
 log "report: $REPORT"
 
-# --- SECRET SCRUB (fail-closed) --------------------------------------------
-# The model has a bash tool and the API keys live in its environment, and a
-# repo-write SSH deploy key + a signing key sit on disk (readable by this user).
-# A curious model could `env` or `cat ~/.ssh/…` into its transcript. So: redact
-# the known secret VALUES, and then FAIL CLOSED — refuse to publish — if (a) any
-# known secret value survives, or (b) ANY private-key material appears at all,
-# known or not. We never try to "clean" an unknown key; we just refuse.
+# --- SECRET SCRUB (defense in depth; the sandbox is the primary control) -----
+# The bwrap sandbox already hides the SSH deploy/sign keys and the secrets file
+# from the model, and only the low-impact Fireworks key is reachable in its env.
+# This is the second line before publishing:
+#   (a) fail closed if a real PEM private-key BLOCK appears — matched by the
+#       actual "-----BEGIN … PRIVATE KEY-----" header, NOT prose that merely
+#       says "private key" (findings legitimately discuss keys). Checked first,
+#       before any redaction could mask a header.
+#   (b) redact known secret VALUES (every line, so a multi-line body is fully
+#       covered) and fail closed if any survives.
 PUBFILES=("$REPORT" "$MERGED"); for m in "${MODELS[@]}"; do PUBFILES+=("$OUT/$m.findings.json" "$OUT/$m.raw.txt"); done
-secrets=("${FIREWORKS_API_KEY:-}" "${BRAVE_API_KEY:-}" "${EXA_API_KEY:-}" "${RESEND_API_KEY:-}")
-# Include the private-key file contents so a leaked key body is redacted too.
-for k in "$DEPLOY_KEY" "$SIGN_KEY"; do [ -f "$k" ] && secrets+=("$(cat "$k")"); done
-for f in "${PUBFILES[@]}"; do [ -f "$f" ] || continue
-  for s in "${secrets[@]}"; do [ -n "$s" ] || continue
-    # Redact per-line so multi-line key bodies are handled; then the fail-closed
-    # markers below are the real guarantee.
-    esc=$(printf '%s' "$s" | head -1 | sed 's/[#&/\\]/\\&/g'); [ -n "$esc" ] && sed -i "s#${esc}#[REDACTED]#g" "$f"
-  done
-done
 LEAK=0
 for f in "${PUBFILES[@]}"; do [ -f "$f" ] || continue
-  for s in "${secrets[@]}"; do [ -n "$s" ] || continue
-    first=$(printf '%s' "$s" | head -1)
-    # `--`: a key body's first line starts with "-----", which grep would
-    # otherwise parse as options.
-    if [ -n "$first" ] && grep -Fq -- "$first" "$f"; then log "SECRET VALUE present in $f — refusing to publish"; LEAK=1; fi
-  done
-  # (b) fail closed on ANY private-key material, whatever its source.
-  if grep -qE 'PRIVATE KEY|BEGIN (OPENSSH|RSA|EC|DSA|PGP)' "$f"; then
-    log "PRIVATE-KEY MATERIAL in $f — refusing to publish"; LEAK=1
+  if grep -qE -- '-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----' "$f"; then
+    log "PRIVATE-KEY BLOCK in $f — refusing to publish"; LEAK=1
   fi
+done
+secrets=("${FIREWORKS_API_KEY:-}" "${BRAVE_API_KEY:-}" "${EXA_API_KEY:-}" "${RESEND_API_KEY:-}")
+for k in "$DEPLOY_KEY" "$SIGN_KEY"; do [ -f "$k" ] && secrets+=("$(cat "$k")"); done
+redact_lines() {  # $1=secret value (maybe multi-line), $2=file
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    esc=$(printf '%s' "$line" | sed 's/[#&/\\]/\\&/g'); sed -i "s#${esc}#[REDACTED]#g" "$2"
+  done < <(printf '%s\n' "$1")
+}
+for f in "${PUBFILES[@]}"; do [ -f "$f" ] || continue
+  for s in "${secrets[@]}"; do [ -n "$s" ] || continue; redact_lines "$s" "$f"; done
+done
+for f in "${PUBFILES[@]}"; do [ -f "$f" ] || continue
+  for s in "${secrets[@]}"; do [ -n "$s" ] || continue
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      if grep -Fq -- "$line" "$f"; then log "SECRET VALUE present in $f — refusing to publish"; LEAK=1; fi
+    done < <(printf '%s\n' "$s")
+  done
 done
 if [ "$LEAK" = 0 ]; then log "secret scrub clean"; else log "secret scrub FAILED — publish blocked"; fi
 

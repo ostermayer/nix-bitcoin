@@ -44,14 +44,28 @@ demands `file:line` evidence and an explicit attack scenario for every item.
 ## Secret safety
 
 The runner contains no secrets (API keys are read at runtime from a file outside
-the repo). The audit runs only against this **public** fork's code, read-only.
-Before anything is published, every output file is scrubbed of the known secret
-values, and **publishing fails closed** — it refuses to publish — if either (a)
-any known secret value survives the scrub, or (b) *any* private-key material
-appears at all (`PRIVATE KEY` / `BEGIN OPENSSH|RSA|EC|DSA|PGP`), known or not.
-So even though the model has a shell and the runner's API keys and SSH keys are
-reachable on the audit host, a model that dumps its environment or reads a key
-file cannot leak it into the public history — the run just declines to publish.
+the repo). The audit runs only against this **public** fork's code. Defense is
+layered, primary control first:
+
+1. **Sandbox (primary).** The model's `pi` process runs inside a `bwrap`
+   sandbox: the whole filesystem is read-only, and the operator's SSH deploy and
+   signing keys (`~/.ssh`) and the secrets file are **masked with empty tmpfs**,
+   so the model's shell literally cannot read them. The pi config is exposed
+   through a throwaway overlay (reads work; writes can't touch the real config).
+   Only the low-impact Fireworks API key is reachable in the model's env.
+2. **No network tools.** `web_search`/`web_fetch` are disabled, removing the
+   prompt-injection-via-fetched-page vector.
+3. **Separate publish.** The push (which needs the deploy key) runs *after* the
+   model exits, as a step no model participates in.
+4. **Fail-closed scrub (last line).** Before publishing, output is scrubbed of
+   known secret values, and the run **refuses to publish** if any known value
+   survives or a real PEM private-key block (`-----BEGIN … PRIVATE KEY-----`)
+   appears.
+
+This design came out of the audit auditing *itself*: an earlier version exposed
+the keys to the model and relied on the scrub alone; the models flagged that a
+shell + network + on-disk deploy key is exfiltration-capable regardless of a
+publish-time scrub, so the keys were moved out of the model's reach entirely.
 
 ## Reproducing a run
 
