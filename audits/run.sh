@@ -44,7 +44,7 @@ export PATH="$HOME/.npm-global/bin:/nix/var/nix/profiles/default/bin:$PATH"
 . "$HOME/.config/fork-audit/secrets.env"
 export FIREWORKS_API_KEY
 ALERT_TO="${ALERT_TO:-dan@ostermayer.co}"
-ALERT_FROM="${ALERT_FROM:-NullR fork-audit <hi@lnzap.org>}"
+ALERT_FROM="${ALERT_FROM:-nix-bitcoin fork audit <hi@lnzap.org>}"
 have() { command -v "$1" >/dev/null; }
 JQ() { jq "$@"; }   # native jq (present on pop-os and CI); nix-shell wrapping ate the args
 
@@ -70,18 +70,24 @@ extract_json() { awk '/```json/{buf="";cap=1;next} cap&&/```/{last=buf;cap=0;nex
 for m in "${MODELS[@]}"; do
   mid="accounts/fireworks/models/$m"; raw="$OUT/$m.raw.txt"; fj="$OUT/$m.findings.json"
   log "=== $m ==="
-  # Run the model inside a bwrap sandbox: whole fs read-only, but the SSH
-  # deploy/sign keys and the secrets file are masked with empty tmpfs, so the
-  # model's bash tool cannot read or exfiltrate them. Network stays shared (pi
-  # must reach Fireworks); the only secret reachable is the low-impact Fireworks
-  # key in the env (bound it with a Fireworks spend cap). Session writes go to
-  # an ephemeral tmpfs; ~/.pi config stays read-only so a run can't tamper with
-  # your interactive pi. This sandbox wraps ONLY the audit's pi call.
+  # Run the model inside a bwrap sandbox. Allowlist, not denylist: the whole of
+  # $HOME is masked with a tmpfs, and ONLY what the audit needs is re-exposed —
+  # pi's binary (~/.npm-global, read-only), pi's config (~/.pi/agent, via a
+  # throwaway overlay so a run can't tamper with your interactive pi), and the
+  # read-only fork checkout. So the model's shell sees none of the operator's
+  # other secrets (SSH keys, ~/.config, ~/Documents/lnd creds, ~/.bitcoin, …).
+  # --unshare-pid gives it its own PID namespace, so it cannot read other
+  # processes' /proc/<pid>/environ. Network stays shared (pi must reach
+  # Fireworks); the only reachable secret is the low-impact Fireworks key in the
+  # env — bound it with a Fireworks spend cap (the residual is quota abuse, not
+  # funds/keys). This sandbox wraps ONLY the audit's pi call; interactive pi is
+  # untouched.
   ( cd "$SRC" && timeout "${FORK_AUDIT_TIMEOUT:-3600}" \
       bwrap \
-        --ro-bind / / --dev /dev --proc /proc --bind /tmp /tmp \
-        --tmpfs "$HOME/.ssh" \
-        --tmpfs "$HOME/.config/fork-audit" \
+        --ro-bind / / --dev /dev --proc /proc --bind /tmp /tmp --unshare-pid \
+        --tmpfs "$HOME" \
+        --ro-bind "$HOME/.npm-global" "$HOME/.npm-global" \
+        --ro-bind "$SRC" "$SRC" \
         --overlay-src "$HOME/.pi/agent" --tmp-overlay "$HOME/.pi/agent" \
         --chdir "$SRC" \
         -- pi -p --provider fireworks --model "$mid:$THINK" --tools "$TOOLS" \
