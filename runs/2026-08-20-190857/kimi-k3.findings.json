@@ -1,0 +1,47 @@
+[
+  {
+    "id": "lnd-root-script-reads-symlinkable-macaroon",
+    "title": "Root ExecStartPost reads lnd's admin.macaroon through an lnd-controlled path, giving the lnd user an arbitrary root file read",
+    "severity": "high",
+    "category": "privesc",
+    "component": "modules/lnd.nix (systemd.services.lnd ExecStartPost)",
+    "file": "modules/lnd.nix",
+    "line": 280,
+    "evidence": "script = nbLib.rootScript \"lnd-create-macaroons\" '' ... adminMacaroonHex=$(${pkgs.xxd}/bin/xxd -ps -u -c 99999 '${networkDir}/admin.macaroon') ... -H @<(printf 'Grpc-Metadata-macaroon: %s\\n' \"$adminMacaroonHex\") -X POST ... ${restUrl}/macaroon",
+    "attack_scenario": "Attacker achieves code execution as the `lnd` service user (lnd is network-exposed on P2P/onion and is the hot-funds daemon; the fork's own rootScript comments treat 'compromised lnd' as the adversary). Attacker replaces /var/lib/lnd/chain/bitcoin/<net>/admin.macaroon with a symlink to a root-only file (e.g. /etc/nix-bitcoin-secrets/backup-encryption-env, bitcoin-rpcpassword-privileged, /etc/shadow, /root/.ssh/id_ed25519). stat() through the symlink succeeds (secrets dir is 0751) so lnd does not recreate the macaroon at startup. Attacker kills the process; Restart=on-failure restarts it; the unsandboxed root ExecStartPost ('+'-prefixed) runs xxd on the symlink, reading the target as root, and POSTs its hex contents as the Grpc-Metadata-macaroon header to https://127.0.0.1:8080/v1/macaroon, which is served by the still-compromised lnd process. Attacker logs the header and recovers the file.",
+    "impact": "secrets -> funds: root-readable file disclosure escalates an lnd compromise to bitcoind full-access RPC credentials, the backup encryption passphrase (backups include the lnd seed dir), /etc/shadow, and root SSH keys",
+    "confidence": 0.7,
+    "false_positive_risk": "Depends on lnd not recreating admin.macaroon when stat succeeds (create-if-missing is lnd's documented behavior, but I could not read upstream lnd source here). If lnd instead rewrites the file each start, the attack degrades to lnd-user DoS of lnd. If services.lnd.macaroons is empty the loop body never runs, so nodes without custom macaroons are unaffected; btcpayserver with lightningBackend=lnd configures one.",
+    "recommendation": "Never read the admin macaroon through the lnd-owned path as root. Read it as the lnd user instead (e.g. adminMacaroonHex=$(${pkgs.util-linux}/bin/runuser -u ${cfg.user} -- ${pkgs.xxd}/bin/xxd -ps -u -c 99999 ...) or sudo -u), or copy it once with a symlink-refusing install into the root-only staging dir and read the copy. Add a -L test refusing symlinked macaroons, mirroring the onion-addresses fix."
+  },
+  {
+    "id": "audit-runner-sandbox-residual-exposure",
+    "title": "audits/run.sh bwrap masks only ~/.ssh and the secrets file; rest of home dir and host /proc stay readable with unrestricted network egress",
+    "severity": "medium",
+    "category": "sandboxing",
+    "component": "audits/run.sh (LLM audit runner)",
+    "file": "audits/run.sh",
+    "line": 82,
+    "evidence": "bwrap \\ --ro-bind / / --dev /dev --proc /proc --bind /tmp /tmp \\ --tmpfs \"$HOME/.ssh\" \\ --tmpfs \"$HOME/.config/fork-audit\" \\ --overlay-src \"$HOME/.pi/agent\" --tmp-overlay \"$HOME/.pi/agent\"",
+    "attack_scenario": "The model gets bash + shared network + a read-only bind of the whole host filesystem with only two paths masked. Verified from inside a run: ~/.config/google-chrome, ~/.config/BraveSoftware and ~/.mozilla profiles are readable; 525 host processes are visible via the shared /proc and /proc/<pid>/environ of same-UID processes is accessible (environ reads are not ptrace-gated). A prompt-injected run (injection can ride the audited repo content itself; the repo is public and PRs are welcomed) or a misbehaving model can exfiltrate browser session data, any API tokens stored elsewhere in $HOME, and same-UID process environments directly over the network, bypassing the publish-side scrub entirely; the scrub (line 134) only matches four named API keys, two SSH key bodies and PEM blocks, exact-substring per line, so transformed content in published transcripts also passes. The runner's own README rationale ('shell + network + on-disk key is exfiltration-capable regardless of a publish-time scrub') applies to every secret still readable.",
+    "impact": "secrets/privacy: credentials and personal data on the maintainer machine reachable by the audited model; potential supply-chain relevance if any signing material ever lives outside the two masked paths",
+    "confidence": 0.8,
+    "false_positive_risk": "On this host today the highest-value items are covered: ~/.ssh and the secrets file are masked, no ssh-agent socket exists, pi auth.json is empty, ~/.gnupg/private-keys-v1.d is empty, and only the deliberately low-impact Fireworks key is in the model's env. Impact depends on what else accumulates in the operator's home dir over time; there is no enforcement that keeps it that way.",
+    "recommendation": "Invert the mount policy: --tmpfs over $HOME (or build the sandbox from an empty root) and ro-bind back only the paths the run needs; hide the host PID namespace (--unshare-pid) and share nothing of /proc beyond the sandbox; restrict egress to the Fireworks API (e.g. slirp4netns/bubblewrap netns with an allowlist proxy). Treat the transcript scrub as advisory only."
+  },
+  {
+    "id": "hardened-preset-reenable-userns",
+    "title": "hardened preset re-enables unprivileged user namespaces, undoing a NixOS hardened-profile protection",
+    "severity": "info",
+    "category": "sandboxing",
+    "component": "modules/presets/hardened.nix",
+    "file": "modules/presets/hardened.nix",
+    "line": 11,
+    "evidence": "# Needed for sandboxed builds and services\n  security.allowUserNamespaces = true;",
+    "attack_scenario": "Any local code execution as an unconfined user (operator account, or a service whose unit lacks RestrictNamespaces) regains access to the unprivileged-user-namespace kernel attack surface that the imported NixOS hardened profile deliberately disabled; every future kernel LPE reachable via userns applies to a node advertised as hardened.",
+    "impact": "rce/privesc precondition: widens kernel exploit surface on the 'hardened' configuration; no standalone exploit",
+    "confidence": 0.9,
+    "false_positive_risk": "Deliberate and commented: nix sandboxed builds and nix-bitcoin's container usage need userns, so disabling it breaks core functionality. This is a tradeoff disclosure, not a defect per se.",
+    "recommendation": "Document the residual in the preset header so 'hardened' users know which profile protections are intentionally relaxed; consider scoping builds to a remote builder so the node itself can keep allowUserNamespaces = false."
+  }
+]

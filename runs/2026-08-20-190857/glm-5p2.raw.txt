@@ -1,0 +1,54 @@
+## Investigation summary
+
+**Attack surface mapped.** This fork ships a trimmed service set: `bitcoind`, `lnd`, `electrs`, `btcpayserver`/`nbxplorer`, plus `lndconnect`, onion services, netns isolation, secrets setup, operator, and the `wireguard`/`secure-node`/`hardened` presets. I focused where funds/keys/cross-service boundaries live: `lnd.nix` (macaroons, seed, wallet password), `secrets/secrets.nix` (permissioning), `bitcoind.nix` (cookie + RPC whitelist), `onion-addresses.nix` (the historical symlink-privesc spot, heavily hardened here), and `netns-exec` (cap_sys_admin wrapper).
+
+**What I checked and ruled out (no finding):**
+- Secrets-in-store: every `cat ${secretsDir}/...` is inside a runtime `preStart`/`script` body; the stored `writeText`/`toFile` artifacts contain only paths/usernames/HMACs, never secret values. No leak.
+- File perms on secrets: `setup-secrets` chowns per-secret with `umask u=rw,go=`, then `chmod 0751` the dir (traverse-only for "other"); unprocessed files fall back to `0440 root:root`. Tight.
+- RPC whitelist: `public`/`btcpayserver` users inherit the curated public list (no wallet calls, no `setban`/`generatetoaddress`/`getblockfrompeer`); `rpcwhitelistdefault=0` only grants full access to `privileged` (HMAC root-only). Correct.
+- Group boundaries: no LN/electrs/btcpay service joins the `bitcoin` group, so the group-readable privileged `.cookie` is reachable only by `bitcoind` + the trusted `operator` (the documented L-10 accepted risk). Minimal.
+- lnd macaroon *creation* race: the root-only `mktemp -d` staging + atomic `mv -f` (rename, no dst-symlink follow) correctly closes the write-time race the comment describes.
+- netns-exec: hardcoded allowlist, absolute-path exec, drops all caps after `setns`, mode 500 owner=operator. Clean.
+- Supply chain: nixpkgs via flake.lock `narHash`, krops pinned by commit+sha, lndinit/nbxplorer pinned hashes, `fetch-release` refuses upstream unless overridden. Clean.
+- backups.nix: I initially suspected the encryption passphrase was bundled in the encrypted backup. It is, but it is encrypted by itself, so an attacker holding only the backup blob cannot decrypt it. **False positive, dropped.**
+
+**What survived scrutiny (two findings):**
+
+1. The lnd macaroon hardening closes only the *write-time* race. The final macaroon is placed into `$RUNTIME_DIRECTORY` (`/run/lnd`), which **lnd owns** (line 265 admits this). After the one-shot `ExecStartPost`, a compromised lnd can replace `/run/lnd/btcpayserver.macaroon` with a symlink to any btcpayserver-readable file. btcpayserver (which starts *after* lnd) reads that path as its macaroon and ships the bytes hex-encoded to lnd's REST endpoint on every RPC — a clean cross-service secret-exfiltration primitive from a single compromised service.
+
+2. `onion-addresses.nix` `copyOnionFile` does a non-atomic `[[ -L $src ]]` check then `install -T` (which follows symlinks), in a root service holding `CAP_DAC_OVERRIDE`/`CAP_DAC_READ_SEARCH`. A compromised tor user can race the check at tor-restart and make root copy an arbitrary file into a service's onion-address slot. The high-value payoff is limited (the destination is owned by another principal, so no direct exfil-to-attacker; realistic solo outcome is corrupted onion address → DoS/privacy via a blind race). Lower confidence.
+
+```json
+[
+  {
+    "id": "lnd-macaroon-dir-tamper-exfil",
+    "title": "Custom lnd macaroons live in lnd-owned /run/lnd, so a compromised lnd can symlink-swap them after creation and exfiltrate btcpayserver-readable secrets",
+    "severity": "high",
+    "category": "privesc",
+    "component": "modules/lnd.nix (ExecStartPost macaroon staging) + modules/btcpayserver.nix",
+    "file": "modules/lnd.nix",
+    "line": 288,
+    "evidence": "RuntimeDirectory = \"lnd\"; # Only used to store custom macaroons  (lnd.nix:249)\n  RuntimeDirectoryMode = \"711\";  (lnd.nix:250)\n  # $RUNTIME_DIRECTORY (/run/lnd) is writable by the lnd service user, ... (lnd.nix:265)\n  ${pkgs.coreutils}/bin/mv -f \"$macaroonTmp\" \"$RUNTIME_DIRECTORY/${macaroon}.macaroon\"  (lnd.nix:288)\n  \"macaroonfilepath=/run/lnd/btcpayserver.macaroon;\" +  (btcpayserver.nix:207)",
+    "attack_scenario": "Attacker has code execution as the lnd service user (e.g. via an lnd peer/REST RCE, a realistic precondition for a network-facing funds daemon). lnd owns /run/lnd (RuntimeDirectory, mode 0711). lnd's ExecStartPost runs once as root and atomically places /run/lnd/btcpayserver.macaroon (owned btcpayserver, 0640) via mv -f. After that one-shot step, the attacker (as lnd) runs `ln -sfn /var/lib/btcpayserver/<sensitive-file> /run/lnd/btcpayserver.macaroon`, which lnd can do because it owns the directory. btcpayserver starts after lnd (btcpayserver `after = wants` includes lnd.service), so the symlink can be in place before btcpayserver first reads its macaroon; it is also re-read on LND RPCs. btcpayserver opens macaroonfilepath=/run/lnd/btcpayserver.macaroon, follows the symlink, reads the target file's bytes, hex-encodes them, and sends `Grpc-Metadata-macaroon: <hex>` to lnd's REST endpoint on every LND RPC. The attacker receives the hex-encoded secret at lnd's own REST endpoint and decodes it. Repeat with different symlink targets to drain arbitrary btcpayserver-readable files: btcpay's data dir (payment history, and any hot-wallet seed/keys) and the nbxplorer .cookie (nbxplorer RPC => btcpay wallet/address/tx data).",
+    "impact": "secrets (goal 3) and privacy (goal 4) exfiltrated across a service boundary from a single compromised service; potential fund theft (goal 1) if btcpay holds a hot-wallet seed in its data dir",
+    "confidence": 0.72,
+    "false_positive_risk": "Depends on btcpayserver's lnd-rest client reading the macaroon from the file path and sending the raw bytes without client-side macaroon-format validation (typical for lnd-rest clients; the server validates). If btcpay validates structure before sending, exfil of arbitrary non-macaroon content fails. If btcpay caches the macaroon once at startup, the symlink must be planted before btcpay starts, which is feasible because lnd starts first. The directory-ownership and symlink-follow facts are confirmed from the code.",
+    "recommendation": "Do not place the final macaroons in lnd's RuntimeDirectory. Use a root-owned, root-writable directory (e.g. a separate root:root 0711 /run/lnd-macaroons) where only root can create/unlink entries; place each macaroon there chowned to its target service user, and point btcpayserver's macaroonfilepath at it. Then a compromised lnd cannot replace a macaroon with a symlink because it cannot modify the containing directory. The existing root-only staging already proves the pattern; make the final location root-only too."
+  },
+  {
+    "id": "onion-addresses-copyonionfile-toctou",
+    "title": "copyOnionFile's symlink refusal is a non-atomic check-then-read (TOCTOU) in a root service with DAC_OVERRIDE",
+    "severity": "low",
+    "category": "activation-script",
+    "component": "modules/onion-addresses.nix",
+    "file": "modules/onion-addresses.nix",
+    "line": 96,
+    "evidence": "CapabilityBoundingSet = \"CAP_CHOWN CAP_FSETID CAP_SETFCAP CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH CAP_FOWNER CAP_IPC_OWNER\";  (onion-addresses.nix:60)\n  copyOnionFile() {\n    local src=$1 dst=$2\n    waitForFile \"$src\"\n    if [[ -L $src ]]; then\n      echo \"Error: refusing to read onion hostname via symlink: $src\" >&2\n      exit 1\n    fi\n    install -T -m 400 \"$src\" \"$dst\"  (onion-addresses.nix:89-96)\n  # ... this service ... must never follow an attacker-planted symlink ...  (onion-addresses.nix:62-63)",
+    "attack_scenario": "Attacker has code execution as the tor service user (compromised tor; realistic for a network-facing daemon that parses onion descriptors). tor owns /var/lib/tor/onion/<service>/ and can replace the hostname file at will. The onion-addresses service runs as root with CAP_DAC_OVERRIDE/CAP_DAC_READ_SEARCH after tor (re)starts. In the window between the `[[ -L $src ]]` regular-file check (line 92) and `install -T -m 400 \"$src\" \"$dst\"` (line 96), which opens src with O_RDONLY and follows symlinks, the attacker swaps the hostname file for a symlink to an arbitrary root-readable file. Root then reads the symlink target and copies it into the service's onion-address slot. The service later reads that slot as externalip (via getPublicAddressCmd = cat .../services/<service>), so its onion address is corrupted: it either fails to announce its onion (loss of inbound connectivity, DoS) or announces attacker-influenced content (privacy/eclipse aid). No direct exfiltration back to the tor attacker, because the destination file is owned by a different principal, so the high-value payoff is limited to DoS/privacy via a blind race at tor-restart.",
+    "impact": "denial of service (goal 5) and privacy (goal 4); no demonstrated path to funds/secrets for the tor-attacker alone",
+    "confidence": 0.4,
+    "false_positive_risk": "The race is blind: the tor user cannot trigger onion-addresses to re-run (it runs once at tor start/restart via wantedBy/bindsTo tor.service), so the attacker only gets a chance at boot/deploy and must hit a microsecond window without knowing when the check runs. There is no clean exfil-to-attacker path since the copied content lands in a file owned by another user. The TOCTOU itself (check then install-follows-symlink) is real and contradicts the stated 'refuse to read via symlink' control, but the exploit payoff is weak.",
+    "recommendation": "Make the symlink refusal atomic: open src with O_NOFOLLOW (and dst with O_NOFOLLOW|O_EXCL) and copy from the resulting fd, instead of `[[ -L ]]` then `install`. A tiny C helper, or `python` with os.open(path, os.O_NOFOLLOW), gives an unmodifiable regular-file fd to feed to `install`/`cp`. Apply the same O_NOFOLLOW discipline to the dst writes and the `chown -h` calls (the `-h` already avoids deref, which is good)."
+  }
+]
+```
