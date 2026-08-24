@@ -1,0 +1,139 @@
+[
+  {
+    "id": "NB-2026-08-24-1",
+    "severity": "medium",
+    "status": "open",
+    "component": "modules/presets/wireguard.nix",
+    "location": "modules/presets/wireguard.nix:170-175",
+    "title": "WireGuard preset rebinds lnd admin REST API to 0.0.0.0 as a side effect of enabling lndconnect",
+    "description": "Importing the wireguard preset together with services.lnd.lndconnect.enable sets services.lnd.restAddress = \"0.0.0.0\" and tor.enforce = false. The macaroon-admin REST endpoint (withdraw-capable with the admin macaroon) then listens on all interfaces, protected solely by the NixOS firewall default-deny plus a subnet-scoped accept rule. The preset does not assert networking.firewall.enable, so any deployment where the firewall is off (user-disabled, or container deployments via extra-container where the in-container firewall is typically disabled) silently exposes the admin API to the LAN/WAN. This is the exact M-2 pattern the fork fixed in lndconnect.nix, reintroduced through a preset, and it contradicts lndconnect.nix's documented invariant that 'enabling lndconnect never changes the listen address implicitly'.",
+    "recommendation": "Bind restAddress to the WireGuard server address (\"${wgSubnet}.1\") instead of 0.0.0.0, with the lnd unit ordered after wireguard-wg-nb.service so the address exists at bind time. If 0.0.0.0 is kept, add an assertion on networking.firewall.enable and update the lndconnect option doc to disclose the preset's rebind.",
+    "exploit_condition": "Firewall disabled or non-enforcing environment (e.g. NixOS container) plus network attacker able to reach the host; still requires a macaroon for full compromise, but unauthenticated DoS and probing surface is exposed.",
+    "model": "kimi-k3"
+  },
+  {
+    "id": "NB-2026-08-24-2",
+    "severity": "low",
+    "status": "open",
+    "component": "helper/update-flake.sh",
+    "location": "helper/update-flake.sh:35-38",
+    "title": "Inverted dirty-tree guard: check fires when -f is given, not when it is absent",
+    "description": "The guard reads `if [[ $forceRun ]] && ! git diff --quiet ../flake.{nix,lock}`. This errors out when -f IS passed and the tree is dirty, and silently proceeds to overwrite flake.nix/flake.lock when the tree is dirty WITHOUT -f. The intended safety check (refuse to clobber uncommitted pin changes unless forced) is exactly backwards. Maintainer-facing tool, so impact is accidental loss of uncommitted pin work, not a deployed-node vulnerability.",
+    "recommendation": "Change to `if [[ ! $forceRun ]] && ! git diff --quiet ../flake.{nix,lock}`.",
+    "model": "kimi-k3"
+  },
+  {
+    "id": "NB-2026-08-24-3",
+    "severity": "info",
+    "status": "acknowledged-in-code",
+    "component": "pkgs/netns-exec",
+    "location": "pkgs/netns-exec/src/main.c (execv call)",
+    "title": "netns-exec execs target with caller's full environment",
+    "description": "After the M-6 fix the wrapper requires an absolute path and drops caps, but execv still inherits LD_PRELOAD/LD_LIBRARY_PATH etc. into the binary executed inside the service netns. The source comment correctly notes the only allowed invoker (operator, 0500 owner-only file-cap wrapper) is already root-equivalent via NOPASSWD sudo/doas to the service users, so there is no privilege boundary crossed. Recorded for completeness; no action required.",
+    "recommendation": "Optional: exec with a scrubbed environment if the wrapper's allowed-user set is ever broadened.",
+    "model": "kimi-k3"
+  },
+  {
+    "id": "NB-2026-08-24-4",
+    "severity": "info",
+    "status": "open",
+    "component": "modules/netns-isolation.nix",
+    "location": "modules/netns-isolation.nix:98 (mkCliExec), pkgs/lib.nix (cliExec option)",
+    "title": "Dead code: mkCliExec / cliExec wiring unused",
+    "description": "mkCliExec is defined but never referenced, and the cliExec option keeps its default \"exec\" with no consumers. Harmless, but dead indirection in a security-sensitive module invites confusion about how operator CLI-in-netns is actually performed (it is netns-exec directly).",
+    "recommendation": "Delete mkCliExec and the cliExec option, or wire them up.",
+    "model": "kimi-k3"
+  },
+  {
+    "id": "NB-2026-08-24-5",
+    "severity": "info",
+    "status": "open",
+    "component": "flake inputs",
+    "location": "flake.nix:10, pkgs/pinned.nix",
+    "title": "Stale nixpkgs-25_05 input is threaded through pinned.nix but unused",
+    "description": "The locked nixpkgs-25_05 is from 2026-01-01 while stable/unstable pins are from 2026-08-19/22. helper/update-flake.nix's version-selection logic only compares stable vs unstable; pkgs-25_05 is passed into pinned.nix and re-exported but never selects a package. No security impact today, but a stale input that looks like a pin baseline is a maintenance hazard.",
+    "recommendation": "Drop the nixpkgs-25_05 input and the pkgs-25_05 parameter, or resume using it deliberately.",
+    "model": "kimi-k3"
+  },
+  {
+    "id": "NB-2026-08-24-6",
+    "severity": "info",
+    "status": "accepted-risk",
+    "component": "examples/qemu-vm",
+    "location": "examples/qemu-vm/id-vm",
+    "title": "Committed demo SSH private key",
+    "description": "id-vm is a real private key in the repo, used by deploy-krops.sh / deploy-qemu-vm.sh with StrictHostKeyChecking=no. Scripts carry prominent 'MAKE SURE TO REPLACE' warnings and the key only grants access to throwaway local demo VMs. Risk is a user copying the demo into production unchanged.",
+    "recommendation": "Keep as-is, or generate the key at demo start to remove the temptation entirely.",
+    "model": "kimi-k3"
+  },
+  {
+    "id": "NB-2026-08-24-V1",
+    "severity": "none",
+    "status": "verified-clean",
+    "component": "version inventory",
+    "location": "flake.lock, pkgs/pinned.nix, pkgs/nbxplorer",
+    "title": "All shipped components at versions with no known applicable advisories",
+    "description": "bitcoind 31.1, lnd 0.21.2-beta, btcpayserver 2.4.2 (the security release; not an RC), electrs 0.11.0, nbxplorer 2.6.10, lndconnect 0.2.1, lndinit 0.1.3-beta. All 2026-08-14 actionable CVE rows are closed by deletion or bump; verified against current tree. nixpkgs stable/unstable pins are 2-5 days old at HEAD.",
+    "recommendation": "Continue weekly pin automation with the VM suite as gate.",
+    "model": "kimi-k3"
+  },
+  {
+    "id": "NB-2026-08-24-V2",
+    "severity": "none",
+    "status": "verified-fixed",
+    "component": "modules/onion-addresses.nix, modules/electrs.nix, modules/bitcoind.nix",
+    "location": "HEAD commit 121406c",
+    "title": "HEAD's four onion-hostname/secret-file fixes are correctly implemented",
+    "description": "Onion content regex anchors the whole string and fails closed on multi-line injection; read-once-into-variable closes the -L/cat TOCTOU as claimed; all chowns use -h; populate-as-root-then-chown ordering leaves no symlink window; electrs.toml written with install -m 600; cookie chmod is an explicit 0640 (and runs as the unprivileged bitcoin user in any case).",
+    "recommendation": "None.",
+    "model": "kimi-k3"
+  },
+  {
+    "id": "NBF-2026-08-24-1",
+    "title": "wireguard preset binds lnd admin REST API to 0.0.0.0, protected only by the firewall",
+    "severity": "low",
+    "file": "modules/presets/wireguard.nix",
+    "lines": "165-175",
+    "description": "When the wireguard preset is enabled with lndconnect, services.lnd.restAddress is set to \"0.0.0.0\" and tor.enforce = false. The admin-macaroon REST endpoint (full wallet control) therefore listens on every interface, including any public one. Protection is a single NixOS firewall accept rule limited to the wg subnet. If an operator disables networking.firewall.enable (common on trusted-LAN setups) or disrupts rule ordering, the admin endpoint is exposed to the network with no second layer.",
+    "impact": "Potential exposure of lnd's admin REST API (fund movement, channel control) beyond the WireGuard peer if the firewall is off or misconfigured.",
+    "recommendation": "Bind restAddress to the wg interface address serverAddress (\"${wgSubnet}.1\") instead of 0.0.0.0. lndconnect-wg already targets serverAddress, so pairing still works and the endpoint is unreachable from any non-wg interface without depending on the firewall.",
+    "status": "open",
+    "model": "glm-5p2"
+  },
+  {
+    "id": "NBF-2026-08-24-2",
+    "title": "btcpayserver and nbxplorer silently disable MemoryDenyWriteExecute (W^X)",
+    "severity": "low",
+    "file": "modules/btcpayserver.nix",
+    "lines": "186, 234",
+    "description": "Both .NET daemons set MemoryDenyWriteExecute = false, overriding defaultHardening. This is required for the .NET JIT, but it is an undocumented exception to the audit's 'every daemon gets full defaultHardening' claim, and btcpayserver is the internet-facing service. The weakened W^X policy widens the exploit surface for any RCE in the btcpayserver HTTP request path.",
+    "impact": "A btcpayserver/nbxplorer code-execution bug can write and execute shellcode in-process, which full W^X would block.",
+    "recommendation": "Keep the override (it is necessary for .NET) but document it explicitly at the override site and in the security audit doc, alongside a note to re-check if a future .NET runtime supports W^X or AOT compilation. Consider AOT-publishing btcpayserver to re-enable W^X if upstream offers it.",
+    "status": "open",
+    "model": "glm-5p2"
+  },
+  {
+    "id": "NBF-2026-08-24-3",
+    "title": "onion-addresses content-validation fix (121406c) verified sound",
+    "severity": "info",
+    "file": "modules/onion-addresses.nix",
+    "lines": "85-118",
+    "description": "The 121406c fix validates copied tor hostname content as exactly one 56-char base32 v3 onion address. Tested the bash ERE ^[a-z2-7]{56}[.]onion$ against every multi-line injection payload (trailing shutdownnotify=, bitcoind.rpchost=, evil-first, bare injection, onion+newline+x): all no-match, because bash's $ anchors to end-of-string without REG_NEWLINE. Read-once-into-$content before validation closes the symlink check-then-read TOCTOU. The config-injection splice path uses the root-owned services/<svc> file, not the user-owned <user>/<svc> file. No residual issue.",
+    "impact": "None. tor-user -> service-user config injection (the original high finding) is closed.",
+    "recommendation": "No action. Re-verify the regex if tor onion address length or alphabet ever changes (v3 is 56 base32 chars; a future v4 would need an update).",
+    "status": "verified",
+    "model": "glm-5p2"
+  },
+  {
+    "id": "NBF-2026-08-24-4",
+    "title": "Committed SSH private key in examples/qemu-vm is a disposable test fixture",
+    "severity": "info",
+    "file": "examples/qemu-vm/id-vm",
+    "lines": "1-5",
+    "description": "An OpenSSH private key is committed at examples/qemu-vm/id-vm. It is the key for the disposable QEMU test VM, which auto-logs-in as root (services.getty.autologinUser = \"root\") and authorizes only ./id-vm.pub. It is not a production credential and guards nothing of value.",
+    "impact": "None. The VM is a local throwaway test environment with root autologin.",
+    "recommendation": "No action. Optionally add a one-line comment at the key noting it is a public test fixture, so a future scanner or reader does not flag it.",
+    "status": "verified",
+    "model": "glm-5p2"
+  }
+]

@@ -1,0 +1,90 @@
+# Security Audit — ostermayer/nix-bitcoin @ 121406c
+
+## Surface map
+
+Trimmed fork. Ships only: bitcoind, lnd (+lndinit, lndconnect), electrs, btcpayserver/nbxplorer, plus infrastructure (onion-services, onion-addresses, netns-isolation, secrets, backups, operator, presets, deployment via krops/nixops).
+
+Trust boundaries claimed and examined:
+- **secrets assembly** (`modules/secrets/secrets.nix`): root `setup-secrets` oneshot, `umask u=rw,go=`, `escapeShellArg` on all interpolations, unlisted files locked to `root:root 0440`.
+- **onion-addresses** (`modules/onion-addresses.nix`): root service with `CAP_DAC_OVERRIDE`; copies tor hostname files into service-readable outputs. Bytes are spliced into `bitcoin.conf`/`lnd.conf` (`externalip=$(cat …)`) and the lndconnect admin-macaroon URL (`--host=$(cat …)`).
+- **RPC auth**: cookie (group `bitcoin`) + HMAC rpcauth users (`privileged`, `public`, `btcpayserver`); public whitelist is a curated safe set.
+- **lnd macaroons**: admin macaroon 0600 lnd; custom macaroons created by a `+`-prefixed root script, staged in a root-only tmpfs dir and moved via `rename(2)`.
+- **netns-exec**: capability wrapper (`cap_sys_admin=ep`, owner-only 0500, absolute-path `execv`, caps dropped pre-exec, hardcoded netns whitelist).
+- **systemd hardening**: `defaultHardening` (ProtectSystem=strict, NoNewPrivileges, MemoryDenyWriteExecute, CapabilityBoundingSet="", …) applied to all daemons.
+- **packaging**: all fetches hash-pinned HTTPS, no curl|bash, no remote patches; nbxplorer 2.6.10, lndinit 0.1.3-beta.
+
+## Investigation (highest-value targets)
+
+**onion-addresses (121406c fix)** — Verified the new `^[a-z2-7]{56}[.]onion$` regex fails closed on every multi-line injection payload (second-line `shutdownnotify=`, `bitcoind.rpchost=`, evil-first-then-onion, bare injection). bash's `$` anchors to end-of-string (no `REG_NEWLINE`), so any embedded newline breaks the match. Read-once-into-`$content` closes the `-L`-then-`cat` TOCTOU: a raced-in secret can never match the onion shape and is never written downstream. The high-risk splice path (`externalip`) reads from `services/<svc>` (root-owned 0755 dir, 0400 file), not the user-owned `<user>/<svc>` path, so a tor-user → service-user injection is closed. Post-write self-tampering by the owning service is not a boundary crossing (owner == consumer). **Fix is sound.**
+
+**electrs / bitcoind cookie (121406c fix)** — `electrs.toml` now `install -m 600` (was bare `>`). Cookie now explicit `chmod 0640` (was `g=r`, which left other-read at bitcoind's umask). Both correct.
+
+**secrets.nix rpcauth wrapper** — Password passed via file (`sys.argv[2]`), enters only the in-process Python `sys.argv` list, never the OS `cmdline`. `/proc/<pid>/cmdline` shows `<user> <file>`, not the password. Correct.
+
+**lnd macaroon root script** — Staging in root-only 0700 `mktemp -d` on the same tmpfs as `/run/lnd`; final move is `mv -f` = `rename(2)`, which replaces a lnd-planted symlink rather than following it. lnd cannot redirect the write to an arbitrary target. Correct.
+
+**netns-exec** — Absolute-path requirement, `execv` (not `execvp`), cap returns checked, nonzero exit on exec failure, whitelist matches the trimmed service set. Correct.
+
+**No secrets in /nix/store** — `builtins.toFile`/`writeText` configs contain only paths, usernames, and salted rpcauth HMACs (not plaintext). All plaintext passwords are appended in `preStart` to 0600 files. Confirmed.
+
+## Findings
+
+The codebase is in strong shape after the 2026-08-14 and 2026-08-20 audits and the 121406c fixes. No high/critical issues remain. Two low-severity hardening gaps and two informational confirmations:
+
+```json
+[
+  {
+    "id": "NBF-2026-08-24-1",
+    "title": "wireguard preset binds lnd admin REST API to 0.0.0.0, protected only by the firewall",
+    "severity": "low",
+    "file": "modules/presets/wireguard.nix",
+    "lines": "165-175",
+    "description": "When the wireguard preset is enabled with lndconnect, services.lnd.restAddress is set to \"0.0.0.0\" and tor.enforce = false. The admin-macaroon REST endpoint (full wallet control) therefore listens on every interface, including any public one. Protection is a single NixOS firewall accept rule limited to the wg subnet. If an operator disables networking.firewall.enable (common on trusted-LAN setups) or disrupts rule ordering, the admin endpoint is exposed to the network with no second layer.",
+    "impact": "Potential exposure of lnd's admin REST API (fund movement, channel control) beyond the WireGuard peer if the firewall is off or misconfigured.",
+    "recommendation": "Bind restAddress to the wg interface address serverAddress (\"${wgSubnet}.1\") instead of 0.0.0.0. lndconnect-wg already targets serverAddress, so pairing still works and the endpoint is unreachable from any non-wg interface without depending on the firewall.",
+    "status": "open"
+  },
+  {
+    "id": "NBF-2026-08-24-2",
+    "title": "btcpayserver and nbxplorer silently disable MemoryDenyWriteExecute (W^X)",
+    "severity": "low",
+    "file": "modules/btcpayserver.nix",
+    "lines": "186, 234",
+    "description": "Both .NET daemons set MemoryDenyWriteExecute = false, overriding defaultHardening. This is required for the .NET JIT, but it is an undocumented exception to the audit's 'every daemon gets full defaultHardening' claim, and btcpayserver is the internet-facing service. The weakened W^X policy widens the exploit surface for any RCE in the btcpayserver HTTP request path.",
+    "impact": "A btcpayserver/nbxplorer code-execution bug can write and execute shellcode in-process, which full W^X would block.",
+    "recommendation": "Keep the override (it is necessary for .NET) but document it explicitly at the override site and in the security audit doc, alongside a note to re-check if a future .NET runtime supports W^X or AOT compilation. Consider AOT-publishing btcpayserver to re-enable W^X if upstream offers it.",
+    "status": "open"
+  },
+  {
+    "id": "NBF-2026-08-24-3",
+    "title": "onion-addresses content-validation fix (121406c) verified sound",
+    "severity": "info",
+    "file": "modules/onion-addresses.nix",
+    "lines": "85-118",
+    "description": "The 121406c fix validates copied tor hostname content as exactly one 56-char base32 v3 onion address. Tested the bash ERE ^[a-z2-7]{56}[.]onion$ against every multi-line injection payload (trailing shutdownnotify=, bitcoind.rpchost=, evil-first, bare injection, onion+newline+x): all no-match, because bash's $ anchors to end-of-string without REG_NEWLINE. Read-once-into-$content before validation closes the symlink check-then-read TOCTOU. The config-injection splice path uses the root-owned services/<svc> file, not the user-owned <user>/<svc> file. No residual issue.",
+    "impact": "None. tor-user -> service-user config injection (the original high finding) is closed.",
+    "recommendation": "No action. Re-verify the regex if tor onion address length or alphabet ever changes (v3 is 56 base32 chars; a future v4 would need an update).",
+    "status": "verified"
+  },
+  {
+    "id": "NBF-2026-08-24-4",
+    "title": "Committed SSH private key in examples/qemu-vm is a disposable test fixture",
+    "severity": "info",
+    "file": "examples/qemu-vm/id-vm",
+    "lines": "1-5",
+    "description": "An OpenSSH private key is committed at examples/qemu-vm/id-vm. It is the key for the disposable QEMU test VM, which auto-logs-in as root (services.getty.autologinUser = \"root\") and authorizes only ./id-vm.pub. It is not a production credential and guards nothing of value.",
+    "impact": "None. The VM is a local throwaway test environment with root autologin.",
+    "recommendation": "No action. Optionally add a one-line comment at the key noting it is a public test fixture, so a future scanner or reader does not flag it.",
+    "status": "verified"
+  }
+]
+```
+
+## Notes on things checked and cleared
+
+- `bitcoind-rpc-public-whitelist.nix`: DoS/side-effect methods (`scantxoutset`, `gettxoutsetinfo`, `getblocktemplate`, `getblockfrompeer`, `fundrawtransaction`) removed; `getpeerinfo`/`getnodeaddresses` retained with a clear rationale (lnd chain-backend health check). `mkDefault`-overridable.
+- `bitcoind-remote.nix`: `rpcpassword` line rewritten via `sed -i '/^rpcauth=/d'` + append, `chmod 0640`; no more unbounded growth, not world-readable.
+- `fetch-release`: refuses to fetch upstream fort-nix releases unless `NIX_BITCOIN_FETCH_UPSTREAM` is set; GPG-fingerprint-pinned.
+- `overrides.nix`: empty (no stale security overrides lagging).
+- netns setup services (`nb-netns-bridge`, `netns-*`) legitimately lack `defaultHardening` because they require `CAP_NET_ADMIN`/iptables/netns manipulation; they are oneshot infrastructure, not input-handling daemons. Acceptable.
+- `secure-node.nix` enables `dbusHideProcessInformation` and doas-over-sudo; bitcoind `listen=true` binds to `127.0.0.1` + onion port only.

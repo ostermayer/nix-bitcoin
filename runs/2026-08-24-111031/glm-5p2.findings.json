@@ -1,0 +1,46 @@
+[
+  {
+    "id": "NBF-2026-08-24-1",
+    "title": "wireguard preset binds lnd admin REST API to 0.0.0.0, protected only by the firewall",
+    "severity": "low",
+    "file": "modules/presets/wireguard.nix",
+    "lines": "165-175",
+    "description": "When the wireguard preset is enabled with lndconnect, services.lnd.restAddress is set to \"0.0.0.0\" and tor.enforce = false. The admin-macaroon REST endpoint (full wallet control) therefore listens on every interface, including any public one. Protection is a single NixOS firewall accept rule limited to the wg subnet. If an operator disables networking.firewall.enable (common on trusted-LAN setups) or disrupts rule ordering, the admin endpoint is exposed to the network with no second layer.",
+    "impact": "Potential exposure of lnd's admin REST API (fund movement, channel control) beyond the WireGuard peer if the firewall is off or misconfigured.",
+    "recommendation": "Bind restAddress to the wg interface address serverAddress (\"${wgSubnet}.1\") instead of 0.0.0.0. lndconnect-wg already targets serverAddress, so pairing still works and the endpoint is unreachable from any non-wg interface without depending on the firewall.",
+    "status": "open"
+  },
+  {
+    "id": "NBF-2026-08-24-2",
+    "title": "btcpayserver and nbxplorer silently disable MemoryDenyWriteExecute (W^X)",
+    "severity": "low",
+    "file": "modules/btcpayserver.nix",
+    "lines": "186, 234",
+    "description": "Both .NET daemons set MemoryDenyWriteExecute = false, overriding defaultHardening. This is required for the .NET JIT, but it is an undocumented exception to the audit's 'every daemon gets full defaultHardening' claim, and btcpayserver is the internet-facing service. The weakened W^X policy widens the exploit surface for any RCE in the btcpayserver HTTP request path.",
+    "impact": "A btcpayserver/nbxplorer code-execution bug can write and execute shellcode in-process, which full W^X would block.",
+    "recommendation": "Keep the override (it is necessary for .NET) but document it explicitly at the override site and in the security audit doc, alongside a note to re-check if a future .NET runtime supports W^X or AOT compilation. Consider AOT-publishing btcpayserver to re-enable W^X if upstream offers it.",
+    "status": "open"
+  },
+  {
+    "id": "NBF-2026-08-24-3",
+    "title": "onion-addresses content-validation fix (121406c) verified sound",
+    "severity": "info",
+    "file": "modules/onion-addresses.nix",
+    "lines": "85-118",
+    "description": "The 121406c fix validates copied tor hostname content as exactly one 56-char base32 v3 onion address. Tested the bash ERE ^[a-z2-7]{56}[.]onion$ against every multi-line injection payload (trailing shutdownnotify=, bitcoind.rpchost=, evil-first, bare injection, onion+newline+x): all no-match, because bash's $ anchors to end-of-string without REG_NEWLINE. Read-once-into-$content before validation closes the symlink check-then-read TOCTOU. The config-injection splice path uses the root-owned services/<svc> file, not the user-owned <user>/<svc> file. No residual issue.",
+    "impact": "None. tor-user -> service-user config injection (the original high finding) is closed.",
+    "recommendation": "No action. Re-verify the regex if tor onion address length or alphabet ever changes (v3 is 56 base32 chars; a future v4 would need an update).",
+    "status": "verified"
+  },
+  {
+    "id": "NBF-2026-08-24-4",
+    "title": "Committed SSH private key in examples/qemu-vm is a disposable test fixture",
+    "severity": "info",
+    "file": "examples/qemu-vm/id-vm",
+    "lines": "1-5",
+    "description": "An OpenSSH private key is committed at examples/qemu-vm/id-vm. It is the key for the disposable QEMU test VM, which auto-logs-in as root (services.getty.autologinUser = \"root\") and authorizes only ./id-vm.pub. It is not a production credential and guards nothing of value.",
+    "impact": "None. The VM is a local throwaway test environment with root autologin.",
+    "recommendation": "No action. Optionally add a one-line comment at the key noting it is a public test fixture, so a future scanner or reader does not flag it.",
+    "status": "verified"
+  }
+]
