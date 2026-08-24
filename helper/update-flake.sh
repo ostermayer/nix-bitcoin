@@ -36,7 +36,7 @@ if [[ $(nix flake 2>&1) != *"requires a sub-command"* ]]; then
     exit 1
 fi
 
-if [[ $forceRun ]] && ! git diff --quiet ../flake.{nix,lock}; then
+if [[ ! $forceRun ]] && ! git diff --quiet ../flake.{nix,lock}; then
     echo "error: flake.nix/flake.lock have changes. Run with option -f to ignore."
     exit 1
 fi
