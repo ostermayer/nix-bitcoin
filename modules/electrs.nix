@@ -76,8 +76,12 @@ in {
       wants = [ "bitcoind.service" ];
       after = [ "bitcoind.service" "nix-bitcoin-secrets.target" ];
       preStart = ''
-        echo "auth = \"${bitcoind.rpc.users.public.name}:$(cat ${secretsDir}/bitcoin-rpcpassword-public)\"" \
-          > electrs.toml
+        # install -m 600 (not a bare `>`): electrs.toml holds the public RPC
+        # password, and the 0770 datadir must not be the only thing protecting
+        # it. Matches lnd.conf / nbxplorer settings.config.
+        install -m 600 \
+          <(echo "auth = \"${bitcoind.rpc.users.public.name}:$(cat ${secretsDir}/bitcoin-rpcpassword-public)\"") \
+          electrs.toml
         '';
       serviceConfig = nbLib.defaultHardening // {
         # electrs only uses the working directory for reading electrs.toml

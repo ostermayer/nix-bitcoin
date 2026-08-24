@@ -436,7 +436,10 @@ in {
         # NOTE: this makes the RPC cookie readable by group `bitcoin` — every
         # service in that group gets full privileged RPC. Keep group membership
         # minimal; new services should use an rpc user + HMAC instead (audit L-10).
-        chmod g=r '${cfg.dataDir}/${optionalString cfg.regtest "regtest/"}.cookie'
+        # Use an explicit 0640 rather than `chmod g=r`: the latter leaves the
+        # other-read bit at whatever bitcoind created (its umask), so the cookie's
+        # world-readability would hinge on the app's file mode. 0640 clears it.
+        chmod 0640 '${cfg.dataDir}/${optionalString cfg.regtest "regtest/"}.cookie'
       '' + (optionalString cfg.regtest) ''
         chmod g=x '${cfg.dataDir}/regtest'
       '';

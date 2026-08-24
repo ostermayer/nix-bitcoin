@@ -85,15 +85,34 @@ in {
           exit 1
         }
 
-        # Copy a Tor hostname file, refusing to read it through a symlink.
+        # Copy a Tor hostname file, refusing to read it through a symlink and
+        # refusing to copy anything that is not exactly one v3 onion address.
+        #
+        # Content validation is load-bearing, not cosmetic: this file's bytes are
+        # spliced verbatim into bitcoin.conf/lnd.conf (`externalip=$(cat …)`) and
+        # into the lndconnect admin-macaroon URL (`--host=$(cat …)`). A tor-user
+        # who can write /var/lib/tor/onion/<svc>/hostname could otherwise plant a
+        # second line (`shutdownnotify=…`, `bitcoind.rpchost=…`) and get it
+        # executed / honoured downstream. Requiring a single `<56×base32>.onion`
+        # line fails closed on any such payload.
+        #
+        # It also closes the check-then-read TOCTOU: we read the file ONCE into a
+        # variable and validate that copy, so even if a symlink is raced in after
+        # the -L check, a secret's contents can never match the onion shape and
+        # are never written to the service-owned output.
         copyOnionFile() {
-          local src=$1 dst=$2
+          local src=$1 dst=$2 content
           waitForFile "$src"
           if [[ -L $src ]]; then
             echo "Error: refusing to read onion hostname via symlink: $src" >&2
             exit 1
           fi
-          install -T -m 400 "$src" "$dst"
+          content=$(cat "$src")
+          if [[ ! $content =~ ^[a-z2-7]{56}[.]onion$ ]]; then
+            echo "Error: $src does not contain exactly one v3 onion address; refusing to copy" >&2
+            exit 1
+          fi
+          install -T -m 400 <(printf '%s\n' "$content") "$dst"
         }
 
         # Wait until tor is up
