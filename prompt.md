@@ -11,6 +11,13 @@ secrets** (wallet password, macaroons, TLS keys, RPC creds, backup keys), (4)
 **break privacy** (deanonymize the node/operator), (5) **deny service**. A
 finding only matters if you can tell a plausible story ending in one of these.
 
+Be relentless. Assume every control is broken until you have read the code that
+makes it hold. Do not accept a comment, an option name, or a "this is safe
+because…" note as proof — verify the mechanism or treat the claim as an attack
+surface. The maintainer has already hardened the obvious things; your value is
+in the second-order defect: the safe-looking control with a bypass, the fix that
+is incomplete, the invariant that one refactor quietly broke.
+
 # Scope
 
 IN scope — audit only these, the fork's own code:
@@ -79,6 +86,28 @@ regressions may hide — the trim to a service subset is a rich source of
 from the code itself and do not invent CVE numbers or advisories — if you can't
 confirm one from what you can read, say so rather than guessing.
 
+# Assume-breach starting positions
+
+Do not limit the attacker to "unauthenticated outsider". Run the audit from each
+of these starting positions in turn, because the real blast-radius bugs live
+here. For each, ask: what can this attacker now reach that they must not?
+
+- **A single service is remote-code-executed.** Assume `lnd`, `bitcoind`,
+  `electrs`, or `btcpayserver`/`nbxplorer` is fully controlled by the attacker
+  (its own upstream CVE, not in scope to *find*, but a valid *precondition*).
+  Now: can it read another service's macaroon/seed/TLS key, write a path a root
+  unit later trusts, tamper with a file in its own writable dir that a root
+  `ExecStartPost` consumes, or escalate through a shared group? "Requires the
+  service to be compromised first" is NOT a reason to dismiss — it is this
+  section's premise. Rate such findings on the escalation they grant.
+- **The operator user is compromised** (stolen SSH key, malicious command).
+  What funds/keys/root does that reach beyond the operator's intended power?
+- **A non-funds helper user is compromised** (e.g. `tor`). Can it inject
+  content into a funds service's config, win a TOCTOU, or redirect a hidden
+  service?
+- **A local unprivileged user exists** on the box. What in the store, `/run`,
+  or a group-readable path leaks to them?
+
 # Method
 
 1. Map the attack surface first: list the modules and what each exposes. Say
@@ -86,7 +115,15 @@ confirm one from what you can read, say so rather than guessing.
    reachable).
 2. For each target, read the actual code, form a hypothesis, and try to
    disprove it before reporting. Prefer reading the file to guessing.
-3. Depth over breadth. Three real, evidenced findings beat twenty vague ones.
+3. **Chain findings.** Two lows that compose into a high ARE a high — report the
+   chain explicitly with each link's `file:line`. A minor info leak plus a
+   predictable path plus a root consumer is a privesc; say so.
+4. **Attack the controls that look solid.** For each hardening measure that
+   appears to work (a sandbox flag, a permission mode, a validation check, an
+   ordering dependency), spend one honest attempt to defeat it: a merge that
+   drops it, an input it does not cover, a race, a path it does not canonicalize.
+   Report the bypass, or note in your narration that you tried and it held.
+5. Depth over breadth. Three real, evidenced findings beat twenty vague ones.
 
 # Evidence discipline (read this twice)
 
@@ -97,6 +134,12 @@ confirm one from what you can read, say so rather than guessing.
   it as `severity: "info"` (hardening suggestion), never as a vulnerability.
 - Do NOT report: theoretical issues with no path, defense-in-depth you'd "like"
   with no bypass shown, or anything you did not read the code for.
+- A stated assume-breach precondition (e.g. "given lnd is compromised") is a
+  legitimate path, NOT a "no path" — state the precondition plainly in
+  `attack_scenario` and rate severity by the escalation it grants from there.
+  Being adversarial means widening the *starting position*, never inventing the
+  *mechanism*: the exploit steps after the precondition must still be real and
+  cited.
 - Rate your own `confidence` honestly and set `false_positive_risk`. It is
   better to say "I'm 0.4 confident, here's what would confirm it" than to assert.
 - You will be graded on precision, not volume. A hallucinated critical is worse
