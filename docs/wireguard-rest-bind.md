@@ -79,7 +79,11 @@ dependency on the interface — remains, and still needs:
   in the preset (runtime wg restarts are fine: a bound socket survives
   interface teardown and resumes when the address returns);
 - the existing firewall accept rule for the wg subnet stays (nixos-fw
-  default-drops; the rule is what admits the peer).
+  default-drops; the rule is what admits the peer). While touching it,
+  scope it to the interface (`-i wg-nb`): today it matches on source
+  subnet alone (2026-08-29 audit, low) — spoofed-source packets arriving
+  on the external interface are only kept out by rp_filter/routing, not
+  by the rule itself.
 
 ## Pre-flight checklist before shipping any variant
 
