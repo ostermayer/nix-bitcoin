@@ -1,0 +1,62 @@
+[
+  {
+    "id": "cve-scan-mixed-whitelist-undercount",
+    "title": "CVE-scan summary silently drops derivations that carry both whitelisted collision CVEs and active CVEs, defeating the per-CVE scoping policy",
+    "severity": "medium",
+    "category": "monitoring",
+    "component": "test/ci/cve-scan.sh (jq summary filter) + .github/workflows/cve-scan.yml",
+    "file": "test/ci/cve-scan.sh",
+    "line": 52,
+    "evidence": "real='[.[] | select(((.whitelisted // []) | length) == 0 and ((.affected_by // []) | length) > 0)]'\n\nvulnix source (src/vulnix/output.py, output_json): \"affected_by\": sorted(v.cve_id for v in i.report), \"whitelisted\": sorted(v.cve_id for v in i.masked) — and derivations whose report set is empty are omitted from the JSON entirely. So every emitted entry already has at least one ACTIVE CVE in affected_by; the `whitelisted | length == 0` conjunct does not filter noise, it discards mixed derivations. Empirical check with the script's exact jq program on a simulated vulnix report (git with whitelisted CVE-2021-21684/CVE-2022-36882 plus active CVE-2026-REALGIT, zlib with one active CVE): the filter counts 1 of 2 active findings; with git as the only finding it counts 0.",
+    "attack_scenario": "No attacker needed; this is a monitoring-integrity defect that fires in exactly the scenario the whitelist was designed for. a6dbbd8 scoped the five collision entries per-CVE (git, dash, snappy, nix, uuid) with the stated intent 'so a genuine future CVE for the real package still reports'. vulnix honors that: a git derivation with the six Jenkins-plugin CVEs masked and one real git-VCS CVE active is emitted with affected_by=[real CVE], whitelisted=[6 masked CVEs], exit 2. The summary filter then excludes it because whitelisted is non-empty. If it is the only finding, count=0, found=false, and the workflow comments 'Scan on ... is clean' and CLOSES the '[cve-scan] known CVEs in the shipped closure' tracking issue. If other findings exist, the issue is updated but the git entry is missing from both the count and the per-package listing. A vulnerable release then ships while the fork's advertised public security posture says clean. The same suppression applies to dash, snappy, nix, and uuid: any future collision-package finding is invisible to the summary.",
+    "impact": "supply-chain/monitoring: silent suppression of genuine CVE findings on five named packages; false 'clean' close of the public CVE tracking issue in the single-finding case; undermines the README's claim of a weekly CVE scan of the shipped closure",
+    "confidence": 0.9,
+    "false_positive_risk": "Low. Verified against vulnix master source (output.py report/masked split, omission of fully-whitelisted derivations) and by running the script's exact jq program on a simulated report. Residual risk: the nixpkgs-pinned vulnix version may differ from master, but the Filtered report/masked design and these JSON fields long predate the pin, and the fork's own commit 7dfbd87 documents the same field semantics ('whitelisted is an ARRAY (empty = not whitelisted)').",
+    "recommendation": "Drop the whitelisted conjunct: real='[.[] | select(((.affected_by // []) | length) > 0)]'. affected_by already contains only unmasked CVEs, so this counts exactly the active findings. Add a CI fixture (two-line JSON like the simulation) so the counting logic is regression-tested."
+  },
+  {
+    "id": "cve-scan-fail-open-closes-issue",
+    "title": "A failed vulnix run (NVD fetch error, whitelist parse error, invalid JSON) reports 'clean' and closes the CVE tracking issue",
+    "severity": "low",
+    "category": "monitoring",
+    "component": "test/ci/cve-scan.sh + .github/workflows/cve-scan.yml (close step)",
+    "file": "test/ci/cve-scan.sh",
+    "line": 44,
+    "evidence": "set +e\nvulnix --json --whitelist \"$WHITELIST\" \"$toplevel\" > vulnix-report.json 2> vulnix.err\nrc=$?      # captured, printed (line 45), never used in any decision\nset -e\n[ -s vulnix-report.json ] || echo '[]' > vulnix-report.json   # empty output becomes 'no findings'\n...\ncount=$(jq \"$real | length\" vulnix-report.json 2>/dev/null || echo 0)  # invalid JSON becomes 0\n\nvulnix error paths (verified in source): NVD update calls r.raise_for_status() before any scanning/output; whitelist.load converts toml.TomlDecodeError to RuntimeError; main() exits 2 on RuntimeError. All produce empty stdout. The workflow then runs gh issue comment '... is clean — closing.' and gh issue close when found=false.",
+    "attack_scenario": "Any infrastructure or input failure turns into a false clean signal. (a) The weekly runner cannot reach the NVD mirror (rate-limit, outage, proxy): vulnix dies before output, report is empty, replaced with [], count=0, found=false, the workflow closes the open tracking issue and the public CVE posture reads clean. (b) A future edit introduces a TOML syntax error in .github/cve-whitelist.toml: every scan from then on fails identically while reporting clean — a persistent, self-reinforcing silence of the entire CVE pipeline, exactly the failure mode 7dfbd87 called 'the worst failure mode for a scanner' when it fixed the previous jq bug. (c) vulnix crashes mid-write leaving truncated JSON: jq fails, || echo 0 yields 0 findings, same false close. The error text does land in the Actions log via cat vulnix.err, but the machine-readable result and the issue state both say clean, and nothing fails the job.",
+    "impact": "monitoring fail-open: false 'clean' status and premature closure of the public known-CVEs tracking issue during scan outages or whitelist misconfiguration; consumers pinning the fork read a stale-clean posture while the scan is actually dead",
+    "confidence": 0.85,
+    "false_positive_risk": "Low on the mechanics (empty-to-[] and jq-fallback-to-0 are verifiable by inspection and were reproduced locally; vulnix error paths verified in source). The only soft point is which exception a given network failure raises, but every failure path shares the empty-stdout property that the script converts to clean.",
+    "recommendation": "Make scan failure fail the job instead of simulating a clean result: after the run, require jq empty vulnix-report.json to succeed and the file to be non-empty (exit 1 otherwise), and drop the || echo 0 fallback so a jq parse error propagates. A failing Scan step already prevents the workflow's open/update/close step from running, leaving the tracking issue untouched, which is the correct behavior for 'scan did not complete'. Keep exit 0 for genuine findings-only runs."
+  },
+  {
+    "id": "whitebind-localhost-noban-peer",
+    "title": "electrs/btcpayserver still enable a whitelisted (NoBan) bitcoind P2P socket on localhost usable by any local user — open finding from the 2026-08-20 run, unfixed and undocumented at 19517ec",
+    "severity": "low",
+    "category": "network-exposure",
+    "component": "modules/bitcoind.nix (whitebind) + modules/electrs.nix + modules/btcpayserver.nix",
+    "file": "modules/bitcoind.nix",
+    "line": 319,
+    "evidence": "modules/bitcoind.nix:318-319: `${optionalString cfg.listenWhitelisted \"whitebind=${cfg.address}:${toString cfg.whitelistedPort}\"}` with cfg.address defaulting to 127.0.0.1; modules/electrs.nix:61 and modules/btcpayserver.nix:124: `listenWhitelisted = true;` set unconditionally whenever those services are enabled. First reported in the 2026-08-20 audit run (finding whitebind-localhost-noban-peer); no commit since has touched whitebind or documented an acceptance.",
+    "attack_scenario": "Any local unprivileged user or compromised co-located service connects to 127.0.0.1:8335 in the default (non-netns) deployment. Peers on a whitebind socket carry NetPermissionFlags::NoBan: they are never discouraged, never banned for misbehavior, and bypass eviction under memory pressure. The attacker floods invalid transactions, blocks, and malformed messages indefinitely, burning bitcoind validation CPU with no automatic mitigation, degrading block and tx propagation for lnd's chain backend. Enabling electrs or btcpayserver — standard deployments — turns this on silently; it is not gated behind an operator choice. In netns-isolation mode the socket binds the netns address and only connected namespaces reach it, which is the better shape, but netns-isolation defaults to off.",
+    "impact": "dos (unbannable resource-exhaustion of bitcoind by any local principal); indirect delay of lnd's chain view",
+    "confidence": 0.6,
+    "false_positive_risk": "Inherited from upstream nix-bitcoin's design rather than introduced by the fork, and a local attacker with a shell has other DoS levers, though bitcoind runs under defaultHardening as a dedicated user so the NoBan socket remains the easy one. Core still validates messages, so this is degradation, not a crash. The finding is a re-report: it was filed on 2026-08-20 and neither fixed nor dispositioned, so it remains a true property of this commit.",
+    "recommendation": "Either disposition it explicitly (a comment at the listenWhitelisted option documenting the NoBan tradeoff and why local users are in scope), or scope the socket: default the whitebind address to the consuming service's path under netns-isolation (already the case) and, for the non-netns default, consider an assertion or doc warning that listenWhitelisted on 127.0.0.1 grants NoBan P2P to every local user, or move nbxplorer/electrs to RPC-only chain access."
+  },
+  {
+    "id": "wireguard-lnd-rest-bind-all-interfaces",
+    "title": "wireguard preset binds lnd's macaroon-admin REST API to 0.0.0.0, relying on the firewall alone — consciously deferred with a documented checklist in 19517ec",
+    "severity": "info",
+    "category": "network-exposure",
+    "component": "modules/presets/wireguard.nix",
+    "file": "modules/presets/wireguard.nix",
+    "line": 181,
+    "evidence": "services.lnd = mkIf lndconnect { restAddress = \"0.0.0.0\"; tor.enforce = false; }; with the only access control being `iptables -w -A nixos-fw -p tcp -s ${wgSubnet}.0/24 --dport ${toString lnd.restPort} -j nixos-fw-accept` on top of default-drop. The deferral doc docs/wireguard-rest-bind.md (added in this commit) documents six breakage vectors for the naive rebind; I verified each against the code: nbLib.address maps 0.0.0.0 to 127.0.0.1 for every internal consumer, cert SANs gain only rpcAddress (modules/lnd.nix mkIf rpcAddress != 127.0.0.1), the macaroon ExecStartPost curls the mapped address, btcpayserver's lnd-rest backend and lndconnect's onion target follow restAddress, and nodeinfo reports it.",
+    "attack_scenario": "Gated behind explicitly enabling the wireguard preset plus lndconnect. Within that config the wg subnet (one peer by design) is the intended trust domain: the peer is handed the admin macaroon anyway via lndconnect-wg. The residual is defense-in-depth only: if the operator disables or misconfigures networking.firewall, the macaroon-authenticated admin REST API becomes reachable on every interface instead of only the wg address; there is no bind-scope backstop. The six consumers also silently depend on the 0.0.0.0-to-localhost mapping, which the deferral doc now records at the bind site.",
+    "impact": "defense-in-depth gap only: admin API exposure scope is enforced by one iptables rule rather than by bind address; no path to funds without a macaroon",
+    "confidence": 0.95,
+    "false_positive_risk": "High as an open vulnerability: this is a documented, consciously deferred advisory (2026-08-24 audit, medium/low advisory) with an accurate breakage checklist and an in-code warning pointing at it. Filed as info so the deferral stays visible in the findings record rather than re-litigating a decision the maintainers already made with full information.",
+    "recommendation": "Keep the deferral, but consider the cheap half of the fix that the doc itself suggests: `services.lnd.certificate.extraIPs = [ serverAddress ]` plus an extra restlisten via extraConfig, keeping restAddress local for internal consumers, so the external bind no longer depends on the 0.0.0.0 mapping. Until then the in-code warning plus the checklist is the right state."
+  }
+]

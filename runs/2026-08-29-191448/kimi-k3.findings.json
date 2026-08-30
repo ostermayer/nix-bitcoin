@@ -1,0 +1,62 @@
+[
+  {
+    "id": "lnd-macaroon-rootscript-reads-lnd-owned-path",
+    "title": "Root ExecStartPost of lnd reads admin.macaroon through a fully lnd-owned path, giving a compromised lnd arbitrary root file disclosure",
+    "severity": "high",
+    "category": "privesc",
+    "component": "modules/lnd.nix (systemd.services.lnd ExecStartPost 'lnd-create-macaroons')",
+    "file": "modules/lnd.nix",
+    "line": 280,
+    "evidence": "adminMacaroonHex=$(${pkgs.xxd}/bin/xxd -ps -u -c 99999 '${networkDir}/admin.macaroon')  — inside `script = nbLib.rootScript \"lnd-create-macaroons\" ''...` (line 263), and rootScript = \"+${self.script name src}\" (pkgs/lib.nix:88). networkDir defaults to \"${cfg.dataDir}/chain/bitcoin/${bitcoind.network}\" (line 45) with dataDir created as `d '${cfg.dataDir}' 0770 ${cfg.user} ${cfg.group}` (line ~201), so every component of /var/lib/lnd/chain/bitcoin/mainnet/admin.macaroon is owned/replaceable by the lnd service user. The script's own comment acknowledges the write-side analog: 'a compromised lnd escalates to arbitrary root file overwrite/chown ... lnd owns that directory and can unlink our temp file and swap in a symlink'.",
+    "attack_scenario": "Attacker with code execution as the lnd user (remote lnd exploit; lnd is network-exposed on its p2p port and optionally REST), on a node with custom macaroons configured (the supported `services.btcpayserver.lightningBackend = \"lnd\"` sets `macaroons.btcpayserver`, and the VM test suite proves this root path runs as real root — the `chown ${user}:` to a foreign uid succeeds and tests.py ~148 uses the resulting macaroon; per systemd.service(5) the '+' prefix drops User= AND all namespacing including PrivateUsers). Steps: (1) `ln -sf /var/lib/bitcoind/.cookie /var/lib/lnd/chain/bitcoin/mainnet/admin.macaroon` (lnd owns every directory in that path and only checks macaroon existence at boot, not content); (2) force an lnd restart (crash it — Restart=on-failure, RestartSec=10s, unlimited attempts); (3) on READY=1 the root script xxd-reads the symlink target with real-root privileges and POSTs its hex bytes as the Grpc-Metadata-macaroon header to https://127.0.0.1:8080/v1/macaroon — i.e. directly into the attacker-controlled lnd process. Repeat for any file: /var/lib/bitcoind/.cookie (0640 bitcoin:bitcoin, unreadable by lnd directly) yields FULL privileged bitcoind RPC including wallet RPC (wallet is enabled by default; `disablewallet` defaults to null); /etc/nix-bitcoin-secrets/backup-encryption-env (root:root 0440) yields the duplicity PASSPHRASE, which decrypts /var/lib/localBackups — whose includeFileList covers the lnd seed mnemonic, lnd wallet.db and the whole secretsDir; /etc/shadow is also readable.",
+    "impact": "secrets + funds: privesc from lnd service user to root-only secrets, privileged bitcoind RPC (wallet), and via backup passphrase the lnd seed and wallet.db",
+    "confidence": 0.8,
+    "false_positive_risk": "If lnd validates/parses admin.macaroon at startup (rather than lazily per-RPC) it would fail to boot on the symlinked file and ExecStartPost (which runs only after READY=1 for Type=notify) would never execute. I believe lnd only checks existence, but I could not run lnd here to confirm. Confirm with: replace admin.macaroon with a symlink to /etc/hostname on a regtest node, restart lnd, and observe whether ExecStartPost's curl payload contains the hex of the symlink target. Requires custom macaroons to be configured; with `macaroons = {}` the concatMapStrings body is empty and nothing is read.",
+    "recommendation": "Never dereference an lnd-controlled path as root. Read the macaroon with dropped privileges: `adminMacaroonHex=$(runuser -u ${cfg.user} -- ${pkgs.xxd}/bin/xxd -ps -u -c 99999 '${networkDir}/admin.macaroon')` — then a symlink to a root-only target fails with EACCES and a symlink to an lnd-readable file yields nothing the attacker lacks. Defense in depth: additionally refuse `-L` symlinks before the read, mirroring onion-addresses.nix copyOnionFile."
+  },
+  {
+    "id": "setup-secrets-fails-open-on-perm-errors",
+    "title": "setup-secrets runs without `set -e` and word-splits unprocessed filenames, so permission hardening failures are silent and the secrets target still activates",
+    "severity": "low",
+    "category": "file-perms",
+    "component": "modules/secrets/secrets.nix (systemd.services.setup-secrets)",
+    "file": "modules/secrets/secrets.nix",
+    "line": 234,
+    "evidence": "script starts at line 185 with no `set -e` (line 188 is just `export LC_COLLATE=C`; contrast with nbLib.script in pkgs/lib.nix:87 which explicitly adds `set -eo pipefail`, proving NixOS adds none). Then: `IFS=$'\\n'` / `chown root: $unprocessedFiles` / `chmod 0440 $unprocessedFiles` (lines 232-236, unquoted, with shellcheck SC2086 disabled). The chown/chmod inside setupSecret() (lines ~204-205) are likewise unchecked; the unit's last command `chmod 0751 \"$dir\"` succeeds regardless, so the oneshot exits 0.",
+    "attack_scenario": "Not an external-attacker scenario but a fail-open safety net: an admin manually placing an extra secret in /etc/nix-bitcoin-secrets (a documented workflow for secretsSetupMethod=manual / out-of-band secrets) whose name contains whitespace or a glob character — e.g. `fulfiller key.bak` — with a typical 022 umask (0644). The word-split chown/chmod target nonexistent names, fail, and the error is ignored: the file stays world-readable in a 0751 directory while nix-bitcoin-secrets.target reports success and switch-to-configuration shows no error, silently voiding the module's documented guarantee 'Make all other secrets accessible to root only'. The same silent-failure applies if any `chown \"$user:$group\"` in setupSecret fails (e.g. a renamed/removed service user in a stale secrets attrset): the secret keeps its old owner and every dependent service still starts.",
+    "impact": "secrets: a secret file can remain world/group-readable while the system asserts secrets are locked down (goal 3, local exposure)",
+    "confidence": 0.75,
+    "false_positive_risk": "Only root (or root-running deploy tooling like krops sync) can create files in the secrets dir, so this needs an admin-side mistake with an unusual filename rather than an attacker action; if NixOS's `script` option ever adds `set -e` implicitly the chown failure would instead fail the unit closed (it does not today, per the fork's own explicit `set -euo pipefail` in onion-addresses.nix).",
+    "recommendation": "Add `set -euo pipefail` at the top of the setup-secrets script, and iterate null-delimited instead of word-splitting: `comm -23 <(printf '%s\\0' *) <(printf '%s\\0' \"${processedFiles[@]}\") | while IFS= read -r -d '' f; do chown root: -- \"$f\"; chmod 0440 -- \"$f\"; done` (with LC_COLLATE=C and comm -z semantics preserved). A failing permission change must fail the unit, not the guarantee."
+  },
+  {
+    "id": "bitcoind-inline-rpcauth-hmac-in-world-readable-store",
+    "title": "Inline rpc.users.<name>.passwordHMAC values are baked into the world-readable Nix store bitcoin.conf",
+    "severity": "low",
+    "category": "secrets-in-store",
+    "component": "modules/bitcoind.nix (configFile)",
+    "file": "modules/bitcoind.nix",
+    "line": 334,
+    "evidence": "configFile = builtins.toFile \"bitcoin.conf\" (line 294) contains `${optionalString (!user.passwordHMACFromFile) \"rpcauth=${user.name}:${user.passwordHMAC}\"}` (line 334). Everything in a toFile derivation lands in /nix/store world-readable; the runtime copy in the dataDir is 0640, but the store copy is not. The option's own example (line ~140) demonstrates inline `passwordHMAC`, encouraging this use. The fork's own services all use the internal `passwordHMACFromFile`, so this only bites custom RPC users.",
+    "attack_scenario": "An operator follows the documented example and sets `services.bitcoind.rpc.users.alice.passwordHMAC` derived from a human-memorable password (instead of a pwgen -s 20 secret). Any local user or unprivileged process reads /nix/store/*-bitcoin.conf, extracts the salt$HMAC, and brute-forces it offline — HMAC-SHA256 with no KDF stretching, so a weak password falls quickly. The recovered password yields authenticated bitcoind RPC from anywhere rpc.allowip permits. Preconditions: operator opts into inline passwordHMAC AND chooses a weak password; the HMAC is not directly usable for auth.",
+    "impact": "secrets: offline-crackable RPC credential hash exposed to all local users (goal 3)",
+    "confidence": 0.9,
+    "false_positive_risk": "The mechanism (store readability of toFile output) is certain; impact depends entirely on user-chosen password strength — with the module-generated 119-bit pwgen passwords it is uncrackable, and users must opt into the inline form. Upstream nix-bitcoin shares this design, so it is a documented-pattern weakness rather than a fork regression.",
+    "recommendation": "Add a warning to the passwordHMAC option description ('value is stored world-readable in the Nix store; use only with high-entropy passwords') and/or expose a public `passwordHMACFromFile = true` pattern for custom users so the HMAC is appended at runtime like the built-in users (line 410)."
+  },
+  {
+    "id": "wireguard-preset-lnd-rest-binds-any",
+    "title": "wireguard preset binds lnd's macaroon-admin REST API to 0.0.0.0, protected by the firewall alone (already tracked, deferred)",
+    "severity": "info",
+    "category": "network-exposure",
+    "component": "modules/presets/wireguard.nix",
+    "file": "modules/presets/wireguard.nix",
+    "line": 181,
+    "evidence": "services.lnd = mkIf lndconnect { restAddress = \"0.0.0.0\"; tor.enforce = false; }; with the only ingress control being `iptables -w -A nixos-fw -p tcp -s ${wgSubnet}.0/24 --dport ${toString lnd.restPort} -j nixos-fw-accept` (line ~156).",
+    "attack_scenario": "If the nixos-fw rules are ever absent (firewall disabled/misconfigured, or an nftables migration gap), the lnd admin REST API listens on all interfaces. Authentication is still macaroon-gated (256-bit, not brute-forceable), so this is defense-in-depth loss, not direct compromise: it widens DoS/attack surface to the LAN and turns any separately-leaked macaroon into remotely usable access. Off-subnet source spoofing of 10.10.0.0/24 cannot complete a TCP handshake (replies route into the wg tunnel), so the firewall rule is not practically bypassable from outside the subnet.",
+    "impact": "dos/privacy-adjacent hardening gap; no direct fund path shown",
+    "confidence": 0.9,
+    "false_positive_risk": "None about the config (it is verbatim in the tree), but the maintainers already know: docs/wireguard-rest-bind.md and commit 19517ec document this as a deferred advisory with a breakage checklist (nbLib.address maps 0.0.0.0 to 127.0.0.1 for all internal consumers, so a naive rebind breaks the macaroon ExecStartPost, btcpayserver backend, and lndconnect onion target). Reported as info solely to record that it was evaluated against the current tree.",
+    "recommendation": "Work through docs/wireguard-rest-bind.md: bind to the wg server address, add it to lnd certificate.extraIPs, order lnd after wireguard-wg-nb (or accept ip_nonlocal_bind), and update the ExecStartPost/btcpayserver/lndconnect consumers in the same change."
+  }
+]
