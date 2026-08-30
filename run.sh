@@ -16,7 +16,7 @@
 # any secret still appears — so a model that dumps its environment can never
 # leak a key into the public branch.
 #
-# Usage: run.sh [ref] [model ...]        (default: origin/release, kimi-k3 glm-5p2)
+# Usage: run.sh [ref] [model ...]        (default: origin/release, kimi-k3 glm-5p3)
 # Env:   FORK_AUDIT_THINK=high  FORK_AUDIT_TIMEOUT=3600  FORK_AUDIT_NO_PUBLISH=1
 #
 # shellcheck disable=SC2016  # jq programs use single quotes intentionally
@@ -33,7 +33,7 @@ THINK="${FORK_AUDIT_THINK:-medium}"   # high wanders to ~40min/model; medium is 
 # could prompt-inject the model, and network tools widen the exfil surface.
 TOOLS="read,bash,grep,git_status,git_diff,git_log"
 REF="${1:-origin/release}"; shift || true
-MODELS=("$@"); [ ${#MODELS[@]} -gt 0 ] || MODELS=(kimi-k3 glm-5p2)
+MODELS=("$@"); [ ${#MODELS[@]} -gt 0 ] || MODELS=(kimi-k3 glm-5p3)
 
 export PATH="$HOME/.npm-global/bin:/nix/var/nix/profiles/default/bin:$PATH"
 # Load secrets as NON-exported shell vars, then export ONLY the low-impact
