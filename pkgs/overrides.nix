@@ -20,4 +20,13 @@ let
   lagging = pkg: version: lib.versionOlder pkg.version version;
 in
 {
+  # 2.4.3 (2026-08-24) is a security release ("updating is recommended for
+  # servers shared with many users"); nixpkgs 26.05 carries 2.4.2. The nuget
+  # deps changed (HtmlSanitizer 9.1.982 -> 9.2.995 among others), so this is a
+  # full package copy with a regenerated lockfile (see ./btcpayserver/) —
+  # buildDotnetModule can't take nugetDeps via overrideAttrs. Drop the copy
+  # together with this override once the pin catches up.
+  btcpayserver = if lagging pkgs.btcpayserver "2.4.3"
+                 then pkgs.callPackage ./btcpayserver { }
+                 else pkgs.btcpayserver;
 }

@@ -1,0 +1,51 @@
+# Copy of nixpkgs' pkgs/by-name/bt/btcpayserver/package.nix, bumped to the
+# 2.4.3 security release (2026-08-24) with a regenerated nuget lockfile.
+# Wired up via a version-guarded entry in ../overrides.nix — buildDotnetModule
+# resolves `nugetDeps` from its ORIGINAL call args (and strips it from the
+# derivation attrs), so a plain overrideAttrs of version/src/nugetDeps cannot
+# work; re-calling the package function is the supported path.
+# Delete this directory together with the override once nixpkgs >= 2.4.3.
+{
+  lib,
+  buildDotnetModule,
+  fetchFromGitHub,
+  dotnetCorePackages,
+  altcoinSupport ? false,
+}:
+
+buildDotnetModule rec {
+  pname = "btcpayserver";
+  version = "2.4.3";
+
+  src = fetchFromGitHub {
+    owner = "btcpayserver";
+    repo = "btcpayserver";
+    tag = "v${version}";
+    hash = "sha256-4rDCvC0YmU9ftCcv2QbVDW4e4a/jdMDDJLDB32vQid4=";
+  };
+
+  projectFile = "BTCPayServer/BTCPayServer.csproj";
+  nugetDeps = ./deps-2.4.3.json;
+
+  dotnet-sdk = dotnetCorePackages.sdk_10_0;
+  dotnet-runtime = dotnetCorePackages.aspnetcore_10_0;
+
+  buildType = if altcoinSupport then "Altcoins-Release" else "Release";
+
+  # macOS has a case-insensitive filesystem, so these two can be the same file
+  postFixup = ''
+    mv $out/bin/{BTCPayServer,btcpayserver} || :
+  '';
+
+  meta = {
+    description = "Self-hosted, open-source cryptocurrency payment processor";
+    homepage = "https://btcpayserver.org";
+    changelog = "https://github.com/btcpayserver/btcpayserver/blob/v${version}/Changelog.md";
+    maintainers = with lib.maintainers; [
+      kcalvinalvin
+      erikarvstedt
+    ];
+    license = lib.licenses.mit;
+    platforms = lib.platforms.linux ++ lib.platforms.darwin;
+  };
+}
