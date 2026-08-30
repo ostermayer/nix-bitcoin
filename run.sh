@@ -70,6 +70,13 @@ TASK="You are auditing the nix-bitcoin fork checked out in the current directory
 
 extract_json() { awk '/```json/{buf="";cap=1;next} cap&&/```/{last=buf;cap=0;next} cap{buf=buf $0 "\n"} END{printf "%s",last}' "$1"; }
 
+# Coerce a model's JSON (array | {findings:[...]} | nested) into a flat array of
+# finding objects with a coalesced `file` field. Shared by the per-model step.
+NORM='def fo: if type=="array" then . elif (type=="object" and ((.findings?|type)=="array")) then .findings else [.. | objects | select(has("title") and has("severity"))] end; fo | map(. + {file:(.file // .location // .component // "?"), line:(.line // 0)})'
+# Set when any model produced finding-shaped output we could not parse. A parse
+# failure must fail the run loudly, never publish a misleading "0 findings".
+PARSE_FAIL=0
+
 for m in "${MODELS[@]}"; do
   mid="accounts/fireworks/models/$m"; raw="$OUT/$m.raw.txt"; fj="$OUT/$m.findings.json"
   log "=== $m ==="
@@ -96,8 +103,31 @@ for m in "${MODELS[@]}"; do
         -- pi -p --provider fireworks --model "$mid:$THINK" --tools "$TOOLS" \
              --append-system-prompt "$PROMPT" "$TASK" ) > "$raw" 2> "$OUT/$m.stderr" \
     || log "$m exited nonzero (partial output kept)"
-  extract_json "$raw" > "$fj"
-  if have jq && jq -e . "$fj" >/dev/null 2>&1; then log "$m: $(jq 'length' "$fj") findings"; else log "$m: no parseable JSON"; echo '[]' > "$fj"; fi
+  extract_json "$raw" > "$fj.raw"
+  # Normalize any shape a model actually emits into a flat array of finding
+  # objects: a bare array, {"findings":[...]}, or (fallback) any nested objects
+  # that carry title+severity. Coalesce the location field (models variously use
+  # file / location / component). A model that deviates from the array contract
+  # must NEVER be read as "0 findings" — that silent fail-open is the exact bug
+  # this audit is meant to catch, and it once hid a high-severity finding.
+  if have jq && jq -e "$NORM" "$fj.raw" >/dev/null 2>&1; then
+    jq "$NORM" "$fj.raw" > "$fj"
+    n=$(jq 'length' "$fj")
+    if [ "$n" -eq 0 ] && grep -qE '"(severity|title)"[[:space:]]*:' "$fj.raw"; then
+      log "$m: PARSE MISMATCH — raw carries findings but normalized to 0"; PARSE_FAIL=1
+    else
+      log "$m: $n findings"
+    fi
+  else
+    # No parseable JSON block. Acceptable only if the model truly emitted nothing
+    # finding-shaped; otherwise fail loud rather than publish a false clean.
+    echo '[]' > "$fj"
+    if grep -qE '"(severity|title)"[[:space:]]*:' "$raw"; then
+      log "$m: PARSE FAIL — findings in raw but no parseable JSON block"; PARSE_FAIL=1
+    else
+      log "$m: no findings (empty)"
+    fi
+  fi
 done
 
 # --- merge + report --------------------------------------------------------
@@ -114,9 +144,10 @@ corrob=$(JQ '[group_by(.file+"|"+(.title//""))[]|select(length>1)]|length' "$MER
   echo "- Models: ${MODELS[*]} (Fireworks, thinking=$THINK)"
   echo "- Prompt: the exact brief used is saved next to this report as \`prompt.used.md\`"
   echo "- Findings: **$total** total · $crit critical · $high high · $corrob flagged by >1 model"; echo
-  echo "> LLM findings are ADVISORY input to human review — not a release gate."; echo
+  [ "$PARSE_FAIL" -ne 0 ] && echo "> ⚠ PARSE FAILURE — at least one model's findings could not be parsed. The counts above are INCOMPLETE. Read the per-model transcripts before trusting this report." && echo
+  echo "> LLM findings gate the release: the audit must complete and be reviewed before shipping."; echo
   if have jq && [ "${total:-0}" != 0 ]; then
-    jq -r --argjson o '{critical:0,high:1,medium:2,low:3,info:4}' 'sort_by($o[.severity]//9)|.[]|
+    jq -r --argjson o '{"critical":0,"high":1,"medium":2,"low":3,"info":4}' 'sort_by($o[.severity]//9)|.[]|
       "## [\(.severity)] \(.title)\n- model: \(.model) · confidence: \(.confidence) · \(.category)\n- \(.file):\(.line)\n- attack: \(.attack_scenario)\n- fix: \(.recommendation)\n"' "$MERGED" 2>/dev/null \
     || jq -r '.[]|"- [\(.severity)] \(.title) (\(.model)) — \(.file):\(.line)"' "$MERGED"
   else echo "No parseable findings — see the per-model transcripts."; fi
@@ -195,3 +226,11 @@ if [ -n "${RESEND_API_KEY:-}" ] && have jq && [ "$LEAK" = 0 ]; then
   then log "emailed $ALERT_TO"; else log "email failed"; fi
 fi
 log "done — $OUT"
+
+# Fail loud if any model's findings could not be parsed. The report and the
+# recovered findings are still published above, but a nonzero exit stops a
+# caller (gate/CI) from reading this run as a clean pass.
+if [ "$PARSE_FAIL" -ne 0 ]; then
+  log "EXIT NONZERO — parse failure in at least one model; results are incomplete"
+  exit 3
+fi
