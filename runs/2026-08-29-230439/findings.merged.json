@@ -1,0 +1,102 @@
+[
+  {
+    "id": "FORK-AUDIT-1",
+    "title": "Macaroon delivery directory /run/lnd is owned by the lnd user",
+    "severity": "low",
+    "confidence": "high",
+    "file": "modules/lnd.nix:249-250",
+    "also_affects": [
+      "modules/btcpayserver.nix (macaroonfilepath=/run/lnd/btcpayserver.macaroon)"
+    ],
+    "description": "RuntimeDirectory=lnd creates /run/lnd owned by lnd:lnd (mode 711). The root ExecStartPost delivers per-user macaroons into it with a root-staged atomic rename, so the delivery instant is safe. But between lnd restarts, a compromised lnd owns that directory and can unlink btcpayserver.macaroon and replace it with a symlink to any file the btcpayserver user can read (e.g. the nbxplorer API .cookie, bitcoin-rpcpassword-btcpayserver via the nbxplorer group, /var/lib/btcpayserver contents). btcpayserver then reads the target as its macaroon and transmits the file's bytes to lnd's own REST endpoint as the Grpc-Metadata-macaroon header: cross-user file disclosure from btcpayserver to lnd.",
+    "impact": "Requires prior lnd compromise (which already exposes funds and the admin macaroon); incremental gain is confidentiality of btcpayserver-readable files, chiefly the nbxplorer cookie (btcpay store xpubs/tx history) and the btcpayserver bitcoind-RPC password (privileges equivalent to the public RPC user lnd already holds). Same threat class as the HEAD fix and M-4, one level lower.",
+    "recommendation": "Deliver macaroons from a root-owned directory instead: e.g. RuntimeDirectory=lnd-macaroons with RuntimeDirectoryMode=0755 on a tiny root oneshot (or keep staging dir /run/lnd-macaroons.XXXXXX pattern but rename into a root-owned final dir), and point consumers' macaroonfilepath there. Mirrors the onion-addresses root:root-then-chown pattern already in tree.",
+    "status": "open",
+    "line": 0,
+    "model": "kimi-k3"
+  },
+  {
+    "id": "FORK-AUDIT-2",
+    "title": "cve-whitelist: blanket [stringbuilder] pname entry contradicts stated scoping policy",
+    "severity": "informational",
+    "confidence": "medium",
+    "file": ".github/cve-whitelist.toml",
+    "description": "The file's own header says blanket pname whitelists are reserved for build tooling never present in the runtime closure, and collisions must be scoped with an explicit cve list. '[stringbuilder]' is whitelisted blanket-style with the comment 'build-time .NET dep (btcpayserver)', but no package named stringbuilder appears in pkgs/btcpayserver/deps-2.4.3.json or pkgs/nbxplorer/deps.json, so the justification could not be verified against the shipped lockfiles. Any future real CVE vulnix maps to that pname is silenced forever.",
+    "recommendation": "Either scope it with cve = [...] like the collision entries at the bottom of the file, or document which store path vulnix is matching so the 'not runtime surface' claim is checkable.",
+    "status": "open",
+    "line": 0,
+    "model": "kimi-k3"
+  },
+  {
+    "id": "FORK-AUDIT-3",
+    "title": "netns-isolation declares an nginx netns although the fork ships no nginx module",
+    "severity": "informational",
+    "confidence": "high",
+    "file": "modules/netns-isolation.nix:243-245",
+    "description": "services.nginx = { id = 21; } lives in the fork's netns service map (and in netns-exec's allowed_netns whitelist), a leftover from the trimmed upstream service set. If a user enables stock NixOS nginx on a netns-isolation node, it is silently moved into network namespace nb-nginx (NetworkNamespacePath), breaking its bind/firewall assumptions. Availability/surprise, not exploitable.",
+    "recommendation": "Remove the nginx entry (and nb-nginx from netns-exec's whitelist) or gate it behind an assertion with a clear error message.",
+    "status": "open",
+    "line": 0,
+    "model": "kimi-k3"
+  },
+  {
+    "id": "FORK-AUDIT-4",
+    "title": "Dead code: mkCliExec defined but never used",
+    "severity": "informational",
+    "confidence": "high",
+    "file": "modules/netns-isolation.nix:98",
+    "description": "mkCliExec builds 'exec netns-exec <netns>' strings that nothing consumes. No security impact; removal reduces the chance a future caller wires an unreviewed path through the file-cap binary.",
+    "recommendation": "Delete it.",
+    "status": "open",
+    "line": 0,
+    "model": "kimi-k3"
+  },
+  {
+    "id": "AUDIT-2026-08-30-1",
+    "severity": "low",
+    "status": "open, tracked (docs/wireguard-rest-bind.md, noted by the 2026-08-29 audit)",
+    "title": "Wireguard preset: lnd REST accept rule is neither interface- nor peer-scoped while REST binds 0.0.0.0",
+    "location": "modules/presets/wireguard.nix:163-170 (rule), :181 (restAddress = \"0.0.0.0\")",
+    "description": "With lndconnect + wireguard enabled, lnd's macaroon-admin REST API listens on all interfaces. The only admission rule is 'iptables -A nixos-fw -p tcp -s 10.10.0.0/24 --dport 8080 -j nixos-fw-accept', which matches the whole wg /24 on any interface. A spoofed-source packet arriving on the external interface is kept out only by rp_filter/routing, and the preset sets no rp_filter (kernel default is off). The endpoint is macaroon-authenticated, so this is defense-in-depth, not a direct compromise path. The full rebind (restAddress -> serverAddress or a second restlisten) is correctly deferred with a breakage checklist, but the rule scoping does not depend on that work.",
+    "recommendation": "Ship the interim hardening now, independent of the deferred rebind: add '-i wg-nb' and narrow the source to the single peer address ('-s ${peerAddress}/32') in the accept rule, and optionally set strict rp_filter in the preset. Then proceed with the recommended second-listener design in docs/wireguard-rest-bind.md when the checklist can be worked.",
+    "file": "modules/presets/wireguard.nix:163-170 (rule), :181 (restAddress = \"0.0.0.0\")",
+    "line": 0,
+    "model": "glm-5p3"
+  },
+  {
+    "id": "AUDIT-2026-08-30-2",
+    "severity": "low",
+    "status": "new",
+    "title": "Deploy example scripts execute the removed 'lightning-cli' and fail after a successful deploy",
+    "location": "examples/deploy-krops.sh:118-119, examples/deploy-qemu-vm.sh:57-58, examples/deploy-container.sh:50-51 (also examples/qemu-vm/minimal-vm.nix:46 help text)",
+    "description": "All three official deploy demos run 'c lightning-cli getinfo' under 'set -euo pipefail'. clightning was removed in the fork trim, so the binary does not exist and each demo exits as a failure immediately after a fully successful deploy. Not a vulnerability, but it is the fork's documented onboarding path: new users see a red failure at the end of a working deploy, and the pattern trains them to ignore late-stage script errors, which is where real deployment failures would surface.",
+    "recommendation": "Replace with 'c lncli getinfo' in the three scripts and the minimal-vm help line. One-line fix per file.",
+    "file": "examples/deploy-krops.sh:118-119, examples/deploy-qemu-vm.sh:57-58, examples/deploy-container.sh:50-51 (also examples/qemu-vm/minimal-vm.nix:46 help text)",
+    "line": 0,
+    "model": "glm-5p3"
+  },
+  {
+    "id": "AUDIT-2026-08-30-3",
+    "severity": "info",
+    "status": "new",
+    "title": "Dead code: mkCliExec left behind by the trim cleanup",
+    "location": "modules/netns-isolation.nix:98",
+    "description": "mkCliExec is defined and never used. The 8c86b91 cleanup removed its sibling nbLib.cliExec from pkgs/lib.nix but missed this local twin. Zero security impact; it only invites confusion about whether netns cli wrappers still exist.",
+    "recommendation": "Delete the line.",
+    "file": "modules/netns-isolation.nix:98",
+    "line": 0,
+    "model": "glm-5p3"
+  },
+  {
+    "id": "AUDIT-2026-08-30-4",
+    "severity": "info",
+    "status": "new",
+    "title": "SECURITY.md references the deleted helper/push-release.sh",
+    "location": "SECURITY.md, 'Release Integrity' note",
+    "description": "The note says push-release.sh and fetch-release 'are not used by this fork and still reference the original maintainer's GPG key'. push-release.sh was deleted in 8c86b91, and fetch-release now refuses to run without NIX_BITCOIN_FETCH_UPSTREAM=1. The guidance is still conservative and safe, just stale.",
+    "recommendation": "Update the note to name only helper/fetch-release and mention its refusal guard.",
+    "file": "SECURITY.md, 'Release Integrity' note",
+    "line": 0,
+    "model": "glm-5p3"
+  }
+]

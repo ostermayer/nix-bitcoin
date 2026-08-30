@@ -1,0 +1,50 @@
+[
+  {
+    "id": "FORK-AUDIT-1",
+    "title": "Macaroon delivery directory /run/lnd is owned by the lnd user",
+    "severity": "low",
+    "confidence": "high",
+    "file": "modules/lnd.nix:249-250",
+    "also_affects": [
+      "modules/btcpayserver.nix (macaroonfilepath=/run/lnd/btcpayserver.macaroon)"
+    ],
+    "description": "RuntimeDirectory=lnd creates /run/lnd owned by lnd:lnd (mode 711). The root ExecStartPost delivers per-user macaroons into it with a root-staged atomic rename, so the delivery instant is safe. But between lnd restarts, a compromised lnd owns that directory and can unlink btcpayserver.macaroon and replace it with a symlink to any file the btcpayserver user can read (e.g. the nbxplorer API .cookie, bitcoin-rpcpassword-btcpayserver via the nbxplorer group, /var/lib/btcpayserver contents). btcpayserver then reads the target as its macaroon and transmits the file's bytes to lnd's own REST endpoint as the Grpc-Metadata-macaroon header: cross-user file disclosure from btcpayserver to lnd.",
+    "impact": "Requires prior lnd compromise (which already exposes funds and the admin macaroon); incremental gain is confidentiality of btcpayserver-readable files, chiefly the nbxplorer cookie (btcpay store xpubs/tx history) and the btcpayserver bitcoind-RPC password (privileges equivalent to the public RPC user lnd already holds). Same threat class as the HEAD fix and M-4, one level lower.",
+    "recommendation": "Deliver macaroons from a root-owned directory instead: e.g. RuntimeDirectory=lnd-macaroons with RuntimeDirectoryMode=0755 on a tiny root oneshot (or keep staging dir /run/lnd-macaroons.XXXXXX pattern but rename into a root-owned final dir), and point consumers' macaroonfilepath there. Mirrors the onion-addresses root:root-then-chown pattern already in tree.",
+    "status": "open",
+    "line": 0
+  },
+  {
+    "id": "FORK-AUDIT-2",
+    "title": "cve-whitelist: blanket [stringbuilder] pname entry contradicts stated scoping policy",
+    "severity": "informational",
+    "confidence": "medium",
+    "file": ".github/cve-whitelist.toml",
+    "description": "The file's own header says blanket pname whitelists are reserved for build tooling never present in the runtime closure, and collisions must be scoped with an explicit cve list. '[stringbuilder]' is whitelisted blanket-style with the comment 'build-time .NET dep (btcpayserver)', but no package named stringbuilder appears in pkgs/btcpayserver/deps-2.4.3.json or pkgs/nbxplorer/deps.json, so the justification could not be verified against the shipped lockfiles. Any future real CVE vulnix maps to that pname is silenced forever.",
+    "recommendation": "Either scope it with cve = [...] like the collision entries at the bottom of the file, or document which store path vulnix is matching so the 'not runtime surface' claim is checkable.",
+    "status": "open",
+    "line": 0
+  },
+  {
+    "id": "FORK-AUDIT-3",
+    "title": "netns-isolation declares an nginx netns although the fork ships no nginx module",
+    "severity": "informational",
+    "confidence": "high",
+    "file": "modules/netns-isolation.nix:243-245",
+    "description": "services.nginx = { id = 21; } lives in the fork's netns service map (and in netns-exec's allowed_netns whitelist), a leftover from the trimmed upstream service set. If a user enables stock NixOS nginx on a netns-isolation node, it is silently moved into network namespace nb-nginx (NetworkNamespacePath), breaking its bind/firewall assumptions. Availability/surprise, not exploitable.",
+    "recommendation": "Remove the nginx entry (and nb-nginx from netns-exec's whitelist) or gate it behind an assertion with a clear error message.",
+    "status": "open",
+    "line": 0
+  },
+  {
+    "id": "FORK-AUDIT-4",
+    "title": "Dead code: mkCliExec defined but never used",
+    "severity": "informational",
+    "confidence": "high",
+    "file": "modules/netns-isolation.nix:98",
+    "description": "mkCliExec builds 'exec netns-exec <netns>' strings that nothing consumes. No security impact; removal reduces the chance a future caller wires an unreviewed path through the file-cap binary.",
+    "recommendation": "Delete it.",
+    "status": "open",
+    "line": 0
+  }
+]
