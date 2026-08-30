@@ -168,7 +168,15 @@ in {
     };
 
     # Listen on all addresses, including `serverAddress`.
-    # This is safe because the listen ports are secured by the firewall.
+    # The listen port is guarded by the firewall (nixos-fw default-drops; only
+    # the wg subnet accept rule above admits REST traffic), but this is still
+    # a known audit finding (2026-08-24, advisory): the admin REST API relies
+    # on the firewall alone. Binding to `serverAddress` instead is DEFERRED —
+    # `nbLib.address` maps 0.0.0.0 to 127.0.0.1, so every internal consumer
+    # of `restAddress` (macaroon ExecStartPost, btcpayserver, lndconnect
+    # onion target) silently depends on this value, and a naive rebind breaks
+    # them plus lnd startup ordering. Read docs/wireguard-rest-bind.md and
+    # work through its checklist before changing this line.
     services.lnd = mkIf lndconnect {
       restAddress = "0.0.0.0";
       tor.enforce = false;
