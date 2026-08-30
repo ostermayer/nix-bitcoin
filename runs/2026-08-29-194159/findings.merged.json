@@ -1,0 +1,143 @@
+[
+  {
+    "id": "F-1",
+    "severity": "medium",
+    "status": "open",
+    "title": "btcpayserver 2.4.2 pinned; upstream 2.4.3 is a security release and nixpkgs will not deliver it",
+    "location": "flake.lock (nixpkgs 26.05 @ b18a4b90 -> btcpayserver 2.4.2); pkgs/overrides.nix (empty)",
+    "summary": "The shipped btcpayserver is 2.4.2. Upstream released 2.4.3 on 2026-08-24 with the note 'This is a security release; updating is recommended for servers shared with many users.' The 2.4.2..2.4.3 diff is one commit ('Various security fixes') touching GreenField API-key/store-user/user/roles controllers, LNURL-auth, invoice checkout, pull payments and payjoin endpoints, i.e. authorization-adjacent code. Details are undisclosed. btcpayserver is the most internet-facing component this fork ships (commonly exposed via its onion service on port 80 or nginx).",
+    "evidence": "nix eval on the locked nixpkgs gives btcpayserver 2.4.2. api.github.com/repos/btcpayserver/btcpayserver/releases/tags/v2.4.3 confirms the security-release note; compare v2.4.2...v2.4.3 shows the auth-related file set. raw.githubusercontent nixos-26.05 AND master pkgs/by-name/bt/btcpayserver/package.nix both still say version 2.4.2, so the weekly helper/update-flake.sh pin bump cannot pick the fix up. vulnix/NVD has no CVE for this, so test/ci/cve-scan.sh stays green.",
+    "impact": "Single-tenant nodes: likely low practical risk. Any deployment exposing btcpay to multiple users (the exact case upstream warns about): unpatched, undisclosed authz-class vulnerabilities in an internet-reachable service that holds an lnd macaroon.",
+    "recommendation": "Ship 2.4.3 now via a version-guarded entry in pkgs/overrides.nix (the mechanism created for exactly this after the clboss incident), and/or open the nixpkgs bump PR and track it. Do not wait for the weekly pin update; it cannot deliver this fix.",
+    "model": "kimi-k3"
+  },
+  {
+    "id": "F-2",
+    "severity": "low",
+    "status": "open",
+    "title": "wireguard preset: lnd REST firewall accept rule is not interface-scoped",
+    "location": "modules/presets/wireguard.nix (networking.firewall.extraCommands)",
+    "summary": "The rule admitting REST traffic is `iptables -A nixos-fw -p tcp -s <wgSubnet>.0/24 --dport <restPort> -j nixos-fw-accept`, with no `-i wg-nb` match. NixOS's default scripted firewall does not enable rp_filter (only the optional firewalld module sets it), so packets with a spoofed wg-subnet source address arriving on the WAN interface also match. Completing a TCP handshake blind is hard (replies route into the tunnel), but on-path or on-LAN attackers can reach the lnd REST port this way.",
+    "evidence": "Rule text in wireguard.nix; grep of the pinned nixpkgs shows rp_filter is only set by services/networking/firewall-firewalld.nix, not by the default firewall.",
+    "impact": "Weakens the only control standing between the network and the macaroon-admin REST API while the restAddress=0.0.0.0 fix is deferred (docs/wireguard-rest-bind.md). TLS plus macaroon auth still required, so this is defense-in-depth erosion, not a breach.",
+    "recommendation": "Add `-i wg-nb` to the accept rule (one word). Independently of the deferred rebind work. Optionally note it in docs/wireguard-rest-bind.md.",
+    "model": "kimi-k3"
+  },
+  {
+    "id": "F-3",
+    "severity": "low",
+    "status": "open",
+    "title": "lndinit pinned at 0.1.3-beta (2022), 33 releases behind upstream",
+    "location": "pkgs/lndinit/default.nix",
+    "summary": "lndinit generates the lnd seed and initializes the wallet in lnd's preStart, the most key-sensitive moment in the stack. The pin vendors 2022-era lnd/btcwallet/btcd code (upstream since bumped those deps repeatedly, e.g. 'bump LND to v0.15.4 to fix witness size bug'). No known CVE and the tool runs offline at first boot, so practical exposure is small, but a four-year-stale wallet/crypto dependency chain is the wrong place to carry it. The NVD-based CVE scan also cannot see Go module vulns.",
+    "evidence": "pkgs/lndinit/default.nix version = 0.1.3-beta; api.github.com/repos/lightninglabs/lndinit/releases shows v0.1.36-beta (2026-06-10); compare v0.1.3-beta...v0.1.36-beta is almost entirely dependency bumps.",
+    "recommendation": "Bump to 0.1.36-beta (two hashes in default.nix) and let the VM suite gate it.",
+    "model": "kimi-k3"
+  },
+  {
+    "id": "F-4",
+    "severity": "low",
+    "status": "open",
+    "title": "CVE-scan loop is blind to non-CVE security releases, the exact class of F-1",
+    "location": "test/ci/cve-scan.sh, .github/workflows/cve-scan.yml",
+    "summary": "The weekly scan vulnixes the runtime closure against NVD and a clean scan auto-closes the tracking issue. That is a sound fail-closed design for CVE-recorded vulns, but btcpayserver, lnd and Bitcoin Core regularly ship security fixes with no CVE (btcpay 2.4.3 has none; Core's low-sev policy ships silently). For those, the scan reports clean while a known security release is outstanding, and the 'clean scan closes the issue' loop then actively suppresses the signal.",
+    "evidence": "F-1 exists undetected by the scan today: btcpayserver 2.4.2 is in the scanned closure and 2.4.3 has no CVE/NVD entry.",
+    "recommendation": "Add a latest-upstream-version comparison for the five shipped services to the weekly workflow (the version-extraction code already exists in release-tag.yml) and fold it into the same tracking issue, or document explicitly in SECURITY.md that the scan covers CVE-recorded vulns only and version drift is tracked elsewhere.",
+    "model": "kimi-k3"
+  },
+  {
+    "id": "F-5",
+    "severity": "low",
+    "status": "open",
+    "title": "User-supplied bitcoind rpcauth HMACs land in the world-readable nix store",
+    "location": "modules/bitcoind.nix (configFile = builtins.toFile ... rpcauth=${user.name}:${user.passwordHMAC})",
+    "summary": "For rpc.users entries that set `passwordHMAC` inline (the documented option), the HMAC is interpolated into bitcoin.conf via builtins.toFile, i.e. a world-readable /nix/store path. An HMAC cannot be used directly for RPC auth, but it is offline-brute-forceable verification material, so a weak underlying password chosen by a user is recoverable by any local user. The fork's own generated users (privileged, public, btcpayserver) use passwordHMACFromFile and are unaffected.",
+    "evidence": "configFile is a store path; the rpcauth lines for non-file users are rendered into it at eval time.",
+    "recommendation": "Cheap fix: deprecate inline passwordHMAC in favor of passwordHMACFromFile, or add a warning on the option description that inline HMACs are world-readable on the node.",
+    "model": "kimi-k3"
+  },
+  {
+    "id": "F-0",
+    "severity": "info",
+    "status": "verified_clean",
+    "title": "No-action verification results for this snapshot",
+    "items": [
+      "bitcoind 31.1, lnd 0.21.2-beta are the latest upstream releases; electrs 0.11.1 and nbxplorer 2.6.11 (CI-only commits) carry no security content; lndconnect 0.2.1 clean.",
+      "All 2026-08-14 audit fixes verified in place at 1caa0af: lnd macaroon creation stages in a root-only mktemp dir and installs by atomic rename (symlink-safe); onion-addresses refuses symlinks, single-reads and format-validates v3 onion names before splicing them into configs; setup-secrets uses escapeShellArg throughout; rpcauth password passed by file; netns-exec requires absolute exec target, checks cap returns, drops caps before execv; public RPC whitelist excludes scantxoutset/getblocktemplate/fundrawtransaction; lndconnect no longer rebinds restAddress.",
+      "CI supply chain: all GitHub Actions SHA-pinned, workflow permissions minimal, CACHIX_SIGNING_KEY/AUTH_TOKEN unset when empty and never available to fork PRs; cve-scan.sh now fails closed on vulnix rc outside {0,2} and on non-array JSON.",
+      "All pkgs sources hash-pinned over HTTPS; no curl|bash, no prebuilt binaries; krops pinned to the commit of tag 1.26.2.",
+      "Known and tracked, not re-listed: lnd restAddress 0.0.0.0 under the wireguard preset (deferred with a real breakage checklist in docs/wireguard-rest-bind.md); bitcoind .cookie group-readable by design (documented at modules/bitcoind.nix)."
+    ],
+    "model": "kimi-k3"
+  },
+  {
+    "id": "F-1",
+    "title": "wireguard preset binds lnd admin REST API on 0.0.0.0, firewall is the only defense layer",
+    "severity": "medium",
+    "status": "known/deferred (documented in docs/wireguard-rest-bind.md; no code fix landed)",
+    "location": "modules/presets/wireguard.nix:181 (services.lnd.restAddress = \"0.0.0.0\" when lndconnect enabled, with tor.enforce = false)",
+    "description": "Enabling the wireguard preset with lndconnect moves the macaroon-authenticated lnd admin REST API from localhost to all interfaces. Protection from the public internet relies solely on the nixos-fw default-drop plus a wg-subnet accept rule. Any deployment that disables the firewall, trusts an interface, or opens the port puts wallet-control endpoints on the network (still macaroon-gated, but this is single-layer defense and enlarges the remotely reachable lnd REST attack surface). docs/services.md's WireGuard guide does not mention the reliance on the firewall. The fork's own 2026-08-24 audit flagged this and the remediation is fully designed (second restlisten on the wg server address, systemd ordering, TLS SAN) but explicitly deferred.",
+    "recommendation": "Implement the extraConfig second-listener variant from docs/wireguard-rest-bind.md (restlisten=${serverAddress}:${port} while keeping restAddress local, plus wireguard-wg-nb ordering), and add the doc's missing negative assertion to test/wireguard-lndconnect.nix (REST not bound on the external interface). Add a one-line firewall-reliance warning to the docs/services.md WireGuard guide until then.",
+    "model": "glm-5p3"
+  },
+  {
+    "id": "F-2",
+    "title": "direnv dev-env bootstraps the archived upstream repo instead of this fork",
+    "severity": "low",
+    "status": "open",
+    "location": "dev/dev-env/create.sh:13-14 (git clone https://github.com/fort-nix/nix-bitcoin src)",
+    "description": "The documented developer workflow (dev/README.md) creates a dev env whose src/ is a fresh clone of fort-nix/nix-bitcoin, the EOL upstream this fork replaced. Contributors and reviewers who bootstrap this way build and test the unmaintained upstream tree, not the fork's code — undermining the README's 'review it yourself before trusting funds to it' posture for anyone using the supported dev path. Inconsistent with commit f51bd87, which re-pointed examples/docs at this fork.",
+    "recommendation": "Clone ostermayer/nix-bitcoin (or copy the local checkout) in create.sh.",
+    "model": "glm-5p3"
+  },
+  {
+    "id": "F-3",
+    "title": "push-release.sh still publishes to fort-nix/nix-bitcoin and versions from upstream's release line",
+    "severity": "low",
+    "status": "open (documented as unused in SECURITY.md: 'Do not rely on them')",
+    "location": "helper/push-release.sh:4 (REPO=fort-nix/nix-bitcoin) and latest-version lookup",
+    "description": "If run, the script archives this fork's master, signs it, and posts the release (and computes its version number) against the archived upstream repository. SECURITY.md documents the tarball helpers as unused and not to be relied on, so this is a latent hazard rather than an active issue — but it is one careless run away from publishing fork code as an upstream release, and its version numbering is wrong for the fork's CalVer tagging (release-tag.yml).",
+    "recommendation": "Point REPO at the fork or delete push-release.sh the way generate-secrets.nix was replaced with a throw, keeping the repo self-consistent.",
+    "model": "glm-5p3"
+  },
+  {
+    "id": "F-4",
+    "title": "Demo VM help text references removed clightning binary",
+    "severity": "info",
+    "status": "open",
+    "location": "examples/qemu-vm/minimal-vm.nix:46 (lightning-cli getinfo in getty helpLine)",
+    "description": "clightning was removed in the fork trim; the first-screen help on the demo VM tells users to run a nonexistent command. Cosmetic, but it is the first-run experience of the project.",
+    "recommendation": "Replace with an lnd equivalent (lncli getinfo).",
+    "model": "glm-5p3"
+  },
+  {
+    "id": "F-5",
+    "title": "CVE-scan whitelist blanket-suppresses whole build-toolchain pnames present in the scan target",
+    "severity": "info",
+    "status": "open (rationale and revisit condition documented in .github/cve-whitelist.toml)",
+    "location": ".github/cve-whitelist.toml (blanket sections: gcc, go, cargo, binutils, ninja, patch, ada, lapack, fontforge, mercurial, ShellCheck, async, Diff, stringbuilder)",
+    "description": "The whitelist header states the scan target is the representative node's runtime closure, yet the blanket entries prove build toolchain appears in that scanned closure (otherwise the entries would be dead). Two consequences: (a) cve-summary.md's 'the software a user actually runs' framing overstates the filter; (b) a blanket [gcc]-style entry silently masks any future real CVE for that pname if it ever lands on a runtime path — the exact failure mode the fork's per-CVE collision entries were designed to avoid.",
+    "recommendation": "Narrow the build-toolchain entries with version bounds or explicit cve lists like the collision section, or split the scan into runtime-only paths and drop the blanket entries.",
+    "model": "glm-5p3"
+  },
+  {
+    "id": "F-6",
+    "title": "Residual fail-open path in CVE count computation",
+    "severity": "info",
+    "status": "open (narrow; bounded by the rc and JSON-array checks added in 1caa0af)",
+    "location": "test/ci/cve-scan.sh:68 (count=$(jq ... 2>/dev/null || echo 0))",
+    "description": "After the exit-code and JSON-array validation, a jq RUNTIME failure on the count filter (e.g. a non-object element) would still yield count=0 and found=false, letting the workflow close the tracking issue on an unsummarized report. Improbable with vulnix's output shape, but it is the last place the script can turn garbage into 'clean'.",
+    "recommendation": "Drop the '|| echo 0' fallback and fail the job when the count query itself errors.",
+    "model": "glm-5p3"
+  },
+  {
+    "id": "F-7",
+    "title": "Public RPC user doubles as the shared local-services credential",
+    "severity": "info",
+    "status": "documented in-code (modules/bitcoind-rpc-public-whitelist.nix header)",
+    "location": "modules/bitcoind.nix (rpc.users.public) + modules/bitcoind-rpc-public-whitelist.nix",
+    "description": "The 'public' user is simultaneously the credential used by local services (lnd, electrs, nbxplorer) and the user a node operator would naturally expose through a proxy. Because lnd requires getpeerinfo/getnodeaddresses, the whitelist retains peer-topology-leaking calls, so any future public exposure of this user leaks node topology. The hazard is documented at the top of the whitelist file, but the boundary is advisory rather than structural.",
+    "recommendation": "Split into a 'local' user (services, with the lnd-required calls) and a separate 'public' user (trimmed whitelist) so exposure cannot silently inherit the local-service grants.",
+    "model": "glm-5p3"
+  }
+]

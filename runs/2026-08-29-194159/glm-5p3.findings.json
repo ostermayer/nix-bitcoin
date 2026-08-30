@@ -1,0 +1,65 @@
+[
+  {
+    "id": "F-1",
+    "title": "wireguard preset binds lnd admin REST API on 0.0.0.0, firewall is the only defense layer",
+    "severity": "medium",
+    "status": "known/deferred (documented in docs/wireguard-rest-bind.md; no code fix landed)",
+    "location": "modules/presets/wireguard.nix:181 (services.lnd.restAddress = \"0.0.0.0\" when lndconnect enabled, with tor.enforce = false)",
+    "description": "Enabling the wireguard preset with lndconnect moves the macaroon-authenticated lnd admin REST API from localhost to all interfaces. Protection from the public internet relies solely on the nixos-fw default-drop plus a wg-subnet accept rule. Any deployment that disables the firewall, trusts an interface, or opens the port puts wallet-control endpoints on the network (still macaroon-gated, but this is single-layer defense and enlarges the remotely reachable lnd REST attack surface). docs/services.md's WireGuard guide does not mention the reliance on the firewall. The fork's own 2026-08-24 audit flagged this and the remediation is fully designed (second restlisten on the wg server address, systemd ordering, TLS SAN) but explicitly deferred.",
+    "recommendation": "Implement the extraConfig second-listener variant from docs/wireguard-rest-bind.md (restlisten=${serverAddress}:${port} while keeping restAddress local, plus wireguard-wg-nb ordering), and add the doc's missing negative assertion to test/wireguard-lndconnect.nix (REST not bound on the external interface). Add a one-line firewall-reliance warning to the docs/services.md WireGuard guide until then."
+  },
+  {
+    "id": "F-2",
+    "title": "direnv dev-env bootstraps the archived upstream repo instead of this fork",
+    "severity": "low",
+    "status": "open",
+    "location": "dev/dev-env/create.sh:13-14 (git clone https://github.com/fort-nix/nix-bitcoin src)",
+    "description": "The documented developer workflow (dev/README.md) creates a dev env whose src/ is a fresh clone of fort-nix/nix-bitcoin, the EOL upstream this fork replaced. Contributors and reviewers who bootstrap this way build and test the unmaintained upstream tree, not the fork's code — undermining the README's 'review it yourself before trusting funds to it' posture for anyone using the supported dev path. Inconsistent with commit f51bd87, which re-pointed examples/docs at this fork.",
+    "recommendation": "Clone ostermayer/nix-bitcoin (or copy the local checkout) in create.sh."
+  },
+  {
+    "id": "F-3",
+    "title": "push-release.sh still publishes to fort-nix/nix-bitcoin and versions from upstream's release line",
+    "severity": "low",
+    "status": "open (documented as unused in SECURITY.md: 'Do not rely on them')",
+    "location": "helper/push-release.sh:4 (REPO=fort-nix/nix-bitcoin) and latest-version lookup",
+    "description": "If run, the script archives this fork's master, signs it, and posts the release (and computes its version number) against the archived upstream repository. SECURITY.md documents the tarball helpers as unused and not to be relied on, so this is a latent hazard rather than an active issue — but it is one careless run away from publishing fork code as an upstream release, and its version numbering is wrong for the fork's CalVer tagging (release-tag.yml).",
+    "recommendation": "Point REPO at the fork or delete push-release.sh the way generate-secrets.nix was replaced with a throw, keeping the repo self-consistent."
+  },
+  {
+    "id": "F-4",
+    "title": "Demo VM help text references removed clightning binary",
+    "severity": "info",
+    "status": "open",
+    "location": "examples/qemu-vm/minimal-vm.nix:46 (lightning-cli getinfo in getty helpLine)",
+    "description": "clightning was removed in the fork trim; the first-screen help on the demo VM tells users to run a nonexistent command. Cosmetic, but it is the first-run experience of the project.",
+    "recommendation": "Replace with an lnd equivalent (lncli getinfo)."
+  },
+  {
+    "id": "F-5",
+    "title": "CVE-scan whitelist blanket-suppresses whole build-toolchain pnames present in the scan target",
+    "severity": "info",
+    "status": "open (rationale and revisit condition documented in .github/cve-whitelist.toml)",
+    "location": ".github/cve-whitelist.toml (blanket sections: gcc, go, cargo, binutils, ninja, patch, ada, lapack, fontforge, mercurial, ShellCheck, async, Diff, stringbuilder)",
+    "description": "The whitelist header states the scan target is the representative node's runtime closure, yet the blanket entries prove build toolchain appears in that scanned closure (otherwise the entries would be dead). Two consequences: (a) cve-summary.md's 'the software a user actually runs' framing overstates the filter; (b) a blanket [gcc]-style entry silently masks any future real CVE for that pname if it ever lands on a runtime path — the exact failure mode the fork's per-CVE collision entries were designed to avoid.",
+    "recommendation": "Narrow the build-toolchain entries with version bounds or explicit cve lists like the collision section, or split the scan into runtime-only paths and drop the blanket entries."
+  },
+  {
+    "id": "F-6",
+    "title": "Residual fail-open path in CVE count computation",
+    "severity": "info",
+    "status": "open (narrow; bounded by the rc and JSON-array checks added in 1caa0af)",
+    "location": "test/ci/cve-scan.sh:68 (count=$(jq ... 2>/dev/null || echo 0))",
+    "description": "After the exit-code and JSON-array validation, a jq RUNTIME failure on the count filter (e.g. a non-object element) would still yield count=0 and found=false, letting the workflow close the tracking issue on an unsummarized report. Improbable with vulnix's output shape, but it is the last place the script can turn garbage into 'clean'.",
+    "recommendation": "Drop the '|| echo 0' fallback and fail the job when the count query itself errors."
+  },
+  {
+    "id": "F-7",
+    "title": "Public RPC user doubles as the shared local-services credential",
+    "severity": "info",
+    "status": "documented in-code (modules/bitcoind-rpc-public-whitelist.nix header)",
+    "location": "modules/bitcoind.nix (rpc.users.public) + modules/bitcoind-rpc-public-whitelist.nix",
+    "description": "The 'public' user is simultaneously the credential used by local services (lnd, electrs, nbxplorer) and the user a node operator would naturally expose through a proxy. Because lnd requires getpeerinfo/getnodeaddresses, the whitelist retains peer-topology-leaking calls, so any future public exposure of this user leaks node topology. The hazard is documented at the top of the whitelist file, but the boundary is advisory rather than structural.",
+    "recommendation": "Split into a 'local' user (services, with the lnd-required calls) and a separate 'public' user (trimmed whitelist) so exposure cannot silently inherit the local-service grants."
+  }
+]

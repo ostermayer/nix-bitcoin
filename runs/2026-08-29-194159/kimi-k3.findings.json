@@ -1,0 +1,67 @@
+[
+  {
+    "id": "F-1",
+    "severity": "medium",
+    "status": "open",
+    "title": "btcpayserver 2.4.2 pinned; upstream 2.4.3 is a security release and nixpkgs will not deliver it",
+    "location": "flake.lock (nixpkgs 26.05 @ b18a4b90 -> btcpayserver 2.4.2); pkgs/overrides.nix (empty)",
+    "summary": "The shipped btcpayserver is 2.4.2. Upstream released 2.4.3 on 2026-08-24 with the note 'This is a security release; updating is recommended for servers shared with many users.' The 2.4.2..2.4.3 diff is one commit ('Various security fixes') touching GreenField API-key/store-user/user/roles controllers, LNURL-auth, invoice checkout, pull payments and payjoin endpoints, i.e. authorization-adjacent code. Details are undisclosed. btcpayserver is the most internet-facing component this fork ships (commonly exposed via its onion service on port 80 or nginx).",
+    "evidence": "nix eval on the locked nixpkgs gives btcpayserver 2.4.2. api.github.com/repos/btcpayserver/btcpayserver/releases/tags/v2.4.3 confirms the security-release note; compare v2.4.2...v2.4.3 shows the auth-related file set. raw.githubusercontent nixos-26.05 AND master pkgs/by-name/bt/btcpayserver/package.nix both still say version 2.4.2, so the weekly helper/update-flake.sh pin bump cannot pick the fix up. vulnix/NVD has no CVE for this, so test/ci/cve-scan.sh stays green.",
+    "impact": "Single-tenant nodes: likely low practical risk. Any deployment exposing btcpay to multiple users (the exact case upstream warns about): unpatched, undisclosed authz-class vulnerabilities in an internet-reachable service that holds an lnd macaroon.",
+    "recommendation": "Ship 2.4.3 now via a version-guarded entry in pkgs/overrides.nix (the mechanism created for exactly this after the clboss incident), and/or open the nixpkgs bump PR and track it. Do not wait for the weekly pin update; it cannot deliver this fix."
+  },
+  {
+    "id": "F-2",
+    "severity": "low",
+    "status": "open",
+    "title": "wireguard preset: lnd REST firewall accept rule is not interface-scoped",
+    "location": "modules/presets/wireguard.nix (networking.firewall.extraCommands)",
+    "summary": "The rule admitting REST traffic is `iptables -A nixos-fw -p tcp -s <wgSubnet>.0/24 --dport <restPort> -j nixos-fw-accept`, with no `-i wg-nb` match. NixOS's default scripted firewall does not enable rp_filter (only the optional firewalld module sets it), so packets with a spoofed wg-subnet source address arriving on the WAN interface also match. Completing a TCP handshake blind is hard (replies route into the tunnel), but on-path or on-LAN attackers can reach the lnd REST port this way.",
+    "evidence": "Rule text in wireguard.nix; grep of the pinned nixpkgs shows rp_filter is only set by services/networking/firewall-firewalld.nix, not by the default firewall.",
+    "impact": "Weakens the only control standing between the network and the macaroon-admin REST API while the restAddress=0.0.0.0 fix is deferred (docs/wireguard-rest-bind.md). TLS plus macaroon auth still required, so this is defense-in-depth erosion, not a breach.",
+    "recommendation": "Add `-i wg-nb` to the accept rule (one word). Independently of the deferred rebind work. Optionally note it in docs/wireguard-rest-bind.md."
+  },
+  {
+    "id": "F-3",
+    "severity": "low",
+    "status": "open",
+    "title": "lndinit pinned at 0.1.3-beta (2022), 33 releases behind upstream",
+    "location": "pkgs/lndinit/default.nix",
+    "summary": "lndinit generates the lnd seed and initializes the wallet in lnd's preStart, the most key-sensitive moment in the stack. The pin vendors 2022-era lnd/btcwallet/btcd code (upstream since bumped those deps repeatedly, e.g. 'bump LND to v0.15.4 to fix witness size bug'). No known CVE and the tool runs offline at first boot, so practical exposure is small, but a four-year-stale wallet/crypto dependency chain is the wrong place to carry it. The NVD-based CVE scan also cannot see Go module vulns.",
+    "evidence": "pkgs/lndinit/default.nix version = 0.1.3-beta; api.github.com/repos/lightninglabs/lndinit/releases shows v0.1.36-beta (2026-06-10); compare v0.1.3-beta...v0.1.36-beta is almost entirely dependency bumps.",
+    "recommendation": "Bump to 0.1.36-beta (two hashes in default.nix) and let the VM suite gate it."
+  },
+  {
+    "id": "F-4",
+    "severity": "low",
+    "status": "open",
+    "title": "CVE-scan loop is blind to non-CVE security releases, the exact class of F-1",
+    "location": "test/ci/cve-scan.sh, .github/workflows/cve-scan.yml",
+    "summary": "The weekly scan vulnixes the runtime closure against NVD and a clean scan auto-closes the tracking issue. That is a sound fail-closed design for CVE-recorded vulns, but btcpayserver, lnd and Bitcoin Core regularly ship security fixes with no CVE (btcpay 2.4.3 has none; Core's low-sev policy ships silently). For those, the scan reports clean while a known security release is outstanding, and the 'clean scan closes the issue' loop then actively suppresses the signal.",
+    "evidence": "F-1 exists undetected by the scan today: btcpayserver 2.4.2 is in the scanned closure and 2.4.3 has no CVE/NVD entry.",
+    "recommendation": "Add a latest-upstream-version comparison for the five shipped services to the weekly workflow (the version-extraction code already exists in release-tag.yml) and fold it into the same tracking issue, or document explicitly in SECURITY.md that the scan covers CVE-recorded vulns only and version drift is tracked elsewhere."
+  },
+  {
+    "id": "F-5",
+    "severity": "low",
+    "status": "open",
+    "title": "User-supplied bitcoind rpcauth HMACs land in the world-readable nix store",
+    "location": "modules/bitcoind.nix (configFile = builtins.toFile ... rpcauth=${user.name}:${user.passwordHMAC})",
+    "summary": "For rpc.users entries that set `passwordHMAC` inline (the documented option), the HMAC is interpolated into bitcoin.conf via builtins.toFile, i.e. a world-readable /nix/store path. An HMAC cannot be used directly for RPC auth, but it is offline-brute-forceable verification material, so a weak underlying password chosen by a user is recoverable by any local user. The fork's own generated users (privileged, public, btcpayserver) use passwordHMACFromFile and are unaffected.",
+    "evidence": "configFile is a store path; the rpcauth lines for non-file users are rendered into it at eval time.",
+    "recommendation": "Cheap fix: deprecate inline passwordHMAC in favor of passwordHMACFromFile, or add a warning on the option description that inline HMACs are world-readable on the node."
+  },
+  {
+    "id": "F-0",
+    "severity": "info",
+    "status": "verified_clean",
+    "title": "No-action verification results for this snapshot",
+    "items": [
+      "bitcoind 31.1, lnd 0.21.2-beta are the latest upstream releases; electrs 0.11.1 and nbxplorer 2.6.11 (CI-only commits) carry no security content; lndconnect 0.2.1 clean.",
+      "All 2026-08-14 audit fixes verified in place at 1caa0af: lnd macaroon creation stages in a root-only mktemp dir and installs by atomic rename (symlink-safe); onion-addresses refuses symlinks, single-reads and format-validates v3 onion names before splicing them into configs; setup-secrets uses escapeShellArg throughout; rpcauth password passed by file; netns-exec requires absolute exec target, checks cap returns, drops caps before execv; public RPC whitelist excludes scantxoutset/getblocktemplate/fundrawtransaction; lndconnect no longer rebinds restAddress.",
+      "CI supply chain: all GitHub Actions SHA-pinned, workflow permissions minimal, CACHIX_SIGNING_KEY/AUTH_TOKEN unset when empty and never available to fork PRs; cve-scan.sh now fails closed on vulnix rc outside {0,2} and on non-array JSON.",
+      "All pkgs sources hash-pinned over HTTPS; no curl|bash, no prebuilt binaries; krops pinned to the commit of tag 1.26.2.",
+      "Known and tracked, not re-listed: lnd restAddress 0.0.0.0 under the wireguard preset (deferred with a real breakage checklist in docs/wireguard-rest-bind.md); bitcoind .cookie group-readable by design (documented at modules/bitcoind.nix)."
+    ]
+  }
+]
