@@ -1,0 +1,71 @@
+Audit complete. Here's the picture.
+
+## Surface map
+
+The fork is trimmed to bitcoind, lnd (+lndinit, lndconnect), electrs, btcpayserver/nbxplorer, plus infrastructure: `netns-exec` (setcap C wrapper), `modules/secrets/`, `onion-addresses`, `netns-isolation`, presets (wireguard, hardened), deployment (nixops/krops), CI (cve-scan, test, release-tag), helpers, and docs. Roughly 3.5k lines of Nix, 100 lines of C.
+
+## What I verified as solid
+
+- `pkgs/netns-exec/src/main.c`: exact-string netns whitelist, absolute-path exec requirement, bounds-checked `snprintf`, caps cleared before `execv`, wrapper is owner-only 0500 with `cap_sys_admin=ep`, no setuid. M-6 is genuinely closed.
+- `modules/onion-addresses.nix`: root builds dirs root:root 0700, refuses symlinked hostname sources, validates content to a single v3 onion regex, reads once (no TOCTOU), chowns with `-h`, hands the dir over last. M-4 is genuinely closed, and users can't swap their dirs afterward (parent is root-owned 771).
+- `modules/lnd.nix` macaroon `ExecStartPost`: root script stages in a root-only mktemp dir on the same tmpfs and uses atomic `mv` into the lnd-owned runtime dir. Symlink race closed as claimed.
+- `modules/secrets/secrets.nix`: rpcauth password passed via file, not argv; `escapeShellArg` on all interpolations; generation runs under `umask u=rw,go=`.
+- `pkgs/overrides.nix` btcpayserver 2.4.3: version-guarded correctly against the pinned nixpkgs, full package copy (since `nugetDeps` can't ride `overrideAttrs`), lockfile regenerated.
+- `test/ci/cve-scan.sh`: fails closed on build error, non-JSON output, and unexpected vulnix exit codes; scans the runtime closure of a representative node, not build deps.
+- flake.lock pins are days old relative to the 2026-08-29 audit date; CI actions are hash-pinned; no secrets in the Nix store (passwords/HMACs are spliced at preStart).
+
+## Findings
+
+The tree has been through several audit rounds and nearly everything I probed was already closed. What remains is low-grade:
+
+```json
+[
+  {
+    "id": "F1",
+    "severity": "low",
+    "status": "new",
+    "title": "setup-secrets lockdown glob misses dotfiles (fail-open)",
+    "location": "modules/secrets/secrets.nix:229",
+    "detail": "The unprocessed-file lockdown enumerates secretsDir with `printf '%s\\n' *` under `shopt -s nullglob` but no `dotglob`, so dotfiles are never chowned root: or chmod 0440. After the script finishes it deliberately sets secretsDir to 0751 (world-traversable), so a dotfile placed there by root/admin with a permissive umask (e.g. 0644) stays world-readable to all local users, bypassing the 'all other files accessible to root only' guarantee. Only root can write into secretsDir, hence low severity. Fix: add `shopt -s dotglob` to the enumeration.",
+    "impact": "Accidental world-readable secret if an admin or tool drops a dotfile (e.g. `.env`, `.backup-pass`) into the secrets dir."
+  },
+  {
+    "id": "F2",
+    "severity": "low",
+    "status": "known-deferred",
+    "title": "WireGuard preset binds lnd admin REST to 0.0.0.0, guarded only by a source-subnet firewall rule that is not interface-scoped",
+    "location": "modules/presets/wireguard.nix:156-160,181",
+    "detail": "With lndconnect enabled, `services.lnd.restAddress = \"0.0.0.0\"` exposes the macaroon-admin REST API on all interfaces. Protection is a single iptables accept rule matching `-s 10.10.0.0/24` in the shared nixos-fw chain (all interfaces). The default 10.10.0.0/24 is a plausible LAN subnet, so a same-LAN host can match the rule; macaroons still gate the API, so this is defense-in-depth loss, not direct compromise. Documented as deferred in docs/wireguard-rest-bind.md (with a breakage checklist) and noted for interface-scoping in commit 895c7b9. Recorded here so the deferral stays on the findings ledger.",
+    "impact": "Admin REST API reachable beyond the WireGuard peer in subnet-collision or firewall-misconfiguration scenarios; TLS+macaroon remain as the only barriers."
+  },
+  {
+    "id": "F3",
+    "severity": "low",
+    "status": "new",
+    "title": "docs/install.md instructs installing Nix 2.3.10 (2021, EOL) on the deploy machine",
+    "location": "docs/install.md:184-188",
+    "detail": "The deploy-from machine setup pins the Nix 2.3.10 installer (GPG-verified, which is good) but 2.3.x is years past end of maintenance and predates fixes for multiple sandbox-escape CVEs (e.g. CVE-2024-27297 fixed-output-derivation sandbox escape, fixed in 2.20.4+). Anyone evaluating untrusted flakes on the deploy machine with this Nix is exposed. Fix: bump the documented installer to a supported release and re-pin the .asc fingerprint steps.",
+    "impact": "Known-CVE Nix daemon on the deployer workstation; risk materializes when building untrusted expressions."
+  },
+  {
+    "id": "F4",
+    "severity": "informational",
+    "status": "new",
+    "title": "bitcoind preStart compares config with an unquoted RHS glob pattern",
+    "location": "modules/bitcoind.nix:437",
+    "detail": "`[[ ! -e $confFile || $cfg != $(cat $confFile) ]]` treats the existing bitcoin.conf content as a glob pattern. If the file contains pattern metacharacters (reachable via admin-set `extraConfig`), a false 'equal' skips the rewrite, leaving stale rpcauth HMACs after secret rotation and breaking dependent services until manual intervention. No privilege boundary is crossed (the file is owned by the bitcoin user, who can already edit it); availability/robustness only. Fix: quote the RHS — `[[ $cfg != \"$(cat \"$confFile\")\" ]]`.",
+    "impact": "Config update silently skipped; rotated RPC credentials not propagated (service DoS, recoverable)."
+  },
+  {
+    "id": "F5",
+    "severity": "informational",
+    "status": "new",
+    "title": "Public RPC whitelist retains getblockstats; docs demonstrate rpc.allowip 0.0.0.0/0",
+    "location": "modules/bitcoind-rpc-public-whitelist.nix, docs/configuration.md:99-110",
+    "detail": "The whitelist's stated bar is 'bounded CPU cost per call'. getblockstats computes per-block fee histograms over full blocks and is the heaviest call remaining (seconds of CPU on large blocks, parallelizable only up to rpcthreads). The public user is intended for local services, but docs/configuration.md explicitly shows `rpc.allowip = [ \"0.0.0.0/0\" ]`, and if a user follows that, getblockstats is the cheapest remaining CPU-DoS amplifier behind credentials. Mitigations: rpcwhitelistdefault=0 and per-user whitelists are correct. Suggest a one-line caveat in the docs snippet, or dropping getblockstats to a 'heavy' opt-in list.",
+    "impact": "If a user exposes the public RPC user as documented, holders of those credentials get a low-amplification CPU DoS."
+  }
+]
+```
+
+Notes: the committed `examples/qemu-vm/id-vm` private key is test-VM scaffolding, intentionally scoped, not a finding. The operator's NOPASSWD run-as grants and the group-`bitcoin` `.cookie` readability are documented design decisions (audit L-10), not re-reported.

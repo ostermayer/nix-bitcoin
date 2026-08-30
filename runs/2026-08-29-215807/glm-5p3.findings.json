@@ -1,0 +1,17 @@
+[
+  {
+    "id": "lnd-macaroon-root-symlink-read",
+    "title": "Root ExecStartPost reads admin.macaroon through a symlink-followable path in the lnd-owned datadir and exfiltrates the bytes to lnd's own REST endpoint",
+    "severity": "high",
+    "category": "activation-script",
+    "component": "modules/lnd.nix (lnd-create-macaroons ExecStartPost)",
+    "file": "modules/lnd.nix",
+    "line": 280,
+    "evidence": "script = nbLib.rootScript \"lnd-create-macaroons\" ''  # line 262; rootScript = \"+${self.script name src}\" (pkgs/lib.nix:88) — unsandboxed real root\n  adminMacaroonHex=$(${pkgs.xxd}/bin/xxd -ps -u -c 99999 '${networkDir}/admin.macaroon')   # line 280: root opens an lnd-writable path, symlinks followed\n  ${curl} \\\n    -H @<(printf 'Grpc-Metadata-macaroon: %s\\n' \"$adminMacaroonHex\") \\   # line 282: file bytes sent as an HTTP header to lnd's REST listener\n    -X POST -d '{\"permissions\":[...]} ${restUrl}/macaroon | jq ... xxd -p -r > \"$macaroonTmp\"  # lines 283-286",
+    "attack_scenario": "Attacker: the lnd service user, compromised via an lnd exploit (the exact adversary the script's own comment names at lines 265-274). Steps: (1) replace /var/lib/lnd/chain/bitcoin/<net>/admin.macaroon — inside the 0770 lnd:lnd datadir lnd fully controls — with a symlink to a root-only file, e.g. /etc/nix-bitcoin-secrets/backup-encryption-env, wg-server-private-key, /etc/ssh/ssh_host_ed25519_key, or /etc/shadow; (2) trigger a service start (Restart=on-failure spaced over time, any deploy, any reboot — ExecStartPost re-runs on every start); (3) the '+'-prefixed script runs as unsandboxed root, xxd reads the target THROUGH the symlink, and the hex-encoded content is transmitted as the Grpc-Metadata-macaroon header of the POST to https://<restAddress>:<restPort>/v1/macaroon — the listener the compromised lnd itself owns and reads. One root-only file per start; iterate per restart. Payoff: root-only secret exfiltration the lnd user could never read directly — the backup passphrase decrypts backups that contain the whole secretsDir and /var/lib/tor (backups.nix filelist), the wg server key fronts the admin REST API, SSH host keys enable MITM of operator access.",
+    "impact": "secrets (root-only secret exfiltration; chains toward funds via wg-key/backup-passphrase/onion-key reuse)",
+    "confidence": 0.75,
+    "false_positive_risk": "Could be wrong if: (1) the '+' prefix did not bypass sandboxing for ExecStartPost — systemd.exec(5) documents that it applies to all Exec* commands and runs them with full privileges, namespace and filesystem restrictions not applied; (2) networkDir/admin.macaroon were root-owned or not lnd-writable — it is not: tmpfiles creates /var/lib/lnd 0770 lnd:lnd and lndinit/lnd create networkDir as the lnd user; (3) lnd could not re-run ExecStartPost — it re-runs on every service start, and a compromised lnd controls its own failures. Confirm with a VM test: plant a symlink at admin.macaroon and observe the header bytes received on the REST port.",
+    "recommendation": "De-privilege the read so root never dereferences an lnd-controlled path: read the macaroon as the service user (e.g. adminMacaroonHex=$(${runAsUser} lnd cat '${networkDir}/admin.macaroon' | ${pkgs.xxd}/bin/xxd -ps -u -c 99999)) — a symlink to a root-only file then fails closed because the lnd user cannot read it — or open with O_NOFOLLOW and fstat-verify a regular file before reading. The existing root-only staging + rename(2) write path is correct and needs no change."
+  }
+]
