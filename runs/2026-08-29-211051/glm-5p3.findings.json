@@ -1,0 +1,83 @@
+{
+  "findings": [
+    {
+      "id": "F-1",
+      "severity": "high",
+      "title": "lnd ExecStartPost root script follows lnd-planted symlinks when reading admin.macaroon, exfiltrating arbitrary root-readable files to lnd",
+      "component": "modules/lnd.nix",
+      "location": "modules/lnd.nix:280 (ExecStartPost 'lnd-create-macaroons', '+'-prefixed root script)",
+      "prerequisites": "code execution as the lnd service user (compromised lnd daemon); any node with at least one custom macaroon configured (btcpayserver+lnd is the fork's tested default scenario and the cve-scan representative node)",
+      "description": "The root script runs with full privileges ('+' prefix ignores User= and all sandboxing) and reads '${networkDir}/admin.macaroon' with plain xxd. networkDir (/var/lib/lnd/chain/bitcoin/<net>) is inside lnd's ReadWritePaths (datadir 0770 lnd:lnd), so a compromised lnd can unlink admin.macaroon and replace it with a symlink to any root-readable file. Root's xxd follows the symlink, hex-encodes the file, and the result is sent as the 'Grpc-Metadata-macaroon' header in the curl POST to ${restUrl}/macaroon, which is lnd's own REST endpoint: the compromised process receives the file's bytes directly. The read result is hex-only, so no header injection is possible, but disclosure is arbitrary and total (/etc/nix-bitcoin-secrets/wg-server-private-key, bitcoin-rpcpassword-privileged, /etc/ssh/ssh_host_*_key, /etc/shadow). lnd can trigger this at will: crash itself, Restart=on-failure (10s) re-runs ExecStartPost as root on every restart. The 2026-08-24 fixes (9b71bec, b2eb47f) and the in-code comment only cover writes/chmod/chown through tamperable paths; the read side was left open.",
+      "impact": "Breach of the service-isolation boundary: compromised lnd escalates to arbitrary root-readable secret disclosure, including the privileged bitcoind RPC password (full wallet RPC) and the wg private keys.",
+      "recommendation": "Apply the same discipline the file already demands for writes to reads. Either (a) read the macaroon with O_NOFOLLOW semantics (copy it into the root-only staging dir with a no-follow guard, mirroring onion-addresses.nix), or (b) run the xxd read as the lnd user (runuser) so a symlink only exposes lnd-readable files, and/or (c) fail closed unless the bytes look like a v2 macaroon (hex prefix '0201' plus length bounds), which blocks exfiltration of any non-macaroon file.",
+      "status": "open"
+    },
+    {
+      "id": "F-2",
+      "severity": "low",
+      "title": "Same root script writes lnd-controlled REST response to /run tmpfs without a size bound",
+      "component": "modules/lnd.nix",
+      "location": "modules/lnd.nix:286",
+      "prerequisites": "compromised lnd (same as F-1)",
+      "description": "curl | jq | xxd > $staging/<name>.macaroon writes whatever the (compromised) lnd REST endpoint returns into /run with no limit. A multi-gigabyte response exhausts the tmpfs holding journald sockets and unit runtime dirs.",
+      "impact": "Node-wide DoS from an already-compromised lnd.",
+      "recommendation": "Bound the write (e.g. head -c 1M) or validate the response is a plausible macaroon before writing.",
+      "status": "open"
+    },
+    {
+      "id": "F-3",
+      "severity": "low",
+      "title": "SECURITY.md overstates tag signing: CalVer release tags are unsigned bot tags",
+      "component": "SECURITY.md / .github/workflows/release-tag.yml",
+      "location": "SECURITY.md:72-75; release-tag.yml 'Tag and release' step; tag 2026.08.30 (58ccea1) has no signature",
+      "description": "SECURITY.md says 'Commits and tags on this fork are signed with the maintainer's SSH key.' Maintainer commits are signed, but the release tags users pin by name are created by release-tag.yml as unsigned annotated tags with a github-actions[bot] identity. Anyone following the doc's verification instructions against a release tag will fail, and a naive consumer may assume signature protection that does not exist for the artifacts users are told to name.",
+      "impact": "Documentation trust mismatch; flake.lock narHash still provides the real integrity guarantee for flake consumers.",
+      "recommendation": "Scope the SECURITY.md sentence to maintainer commits, or sign release tags with a documented bot key.",
+      "status": "open"
+    },
+    {
+      "id": "F-4",
+      "severity": "low",
+      "title": "Legacy fetch-release update path is a dead end and, when forced, silently pins archived upstream code without the fork's fixes",
+      "component": "helper/fetch-release, helper/makeShell.nix, docs",
+      "location": "helper/makeShell.nix:61-69 (update-nix-bitcoin), pkgs/generate-secrets-deprecated.nix:10, examples/importable-configuration.nix:11, docs/install.md:227, docs/nixops-krops-migration.md:29",
+      "description": "fetch-release now refuses to run unless NIX_BITCOIN_FETCH_UPSTREAM=1 (good guard, commit c3253f3), but the non-flake update path still routes users through it: makeShell's update-nix-bitcoin() calls fetch-release unconditionally (so it can now only ever fail, or, with the env var set, overwrite nix-bitcoin-release.nix with an upstream fort-nix tarball pin that lacks every fork security fix). The deprecated-secrets message, install.md and the migration guide still instruct users to run it.",
+      "impact": "Broken-by-default UX; a user who sets the override var silently reverts their node's nix-bitcoin to unfixed upstream code.",
+      "recommendation": "Delete the update-nix-bitcoin()/fetch-release shell functions and rewrite the remaining doc references to point at the flake pin (github:ostermayer/nix-bitcoin/release).",
+      "status": "open"
+    },
+    {
+      "id": "F-5",
+      "severity": "low",
+      "title": "lnd admin REST API bound to 0.0.0.0 by the wireguard preset, firewall-only protection with a subnet-scoped (not interface-scoped) accept rule",
+      "component": "modules/presets/wireguard.nix",
+      "location": "modules/presets/wireguard.nix:126-131 (restAddress = \"0.0.0.0\"), firewall extraCommands accept rule",
+      "description": "Known and tracked: docs/wireguard-rest-bind.md documents the deferral, the six breakages a naive rebind causes, the recommended second-listener design, and a pre-flight checklist; the 2026-08-29 audit noted the accept rule matches source subnet alone, so spoofed-source packets arriving on the external interface are kept out only by rp_filter/routing. Re-confirmed accurate at this commit; no regression.",
+      "impact": "The macaroon-admin REST endpoint relies solely on the nixos-fw rule when lndconnect+wireguard are combined.",
+      "recommendation": "No new action; ship the documented second-listener design with the checklist when taken up.",
+      "status": "known-deferred (docs/wireguard-rest-bind.md)"
+    },
+    {
+      "id": "F-6",
+      "severity": "info",
+      "title": "btcpayserver holds group write on nbxplorer's data directory (broader than its read need)",
+      "component": "modules/btcpayserver.nix",
+      "location": "modules/btcpayserver.nix:236 (extraGroups = [ cfg.nbxplorer.group ]), tmpfiles 0770 rule",
+      "description": "btcpayserver is in the nbxplorer group and the nbxplorer datadir is 0770, so a compromised btcpayserver can write nbxplorer state, including settings.config and the API .cookie (redirecting nbxplorer's bitcoind view on next restart), not just read the cookie it needs. Upstream-inherited design; the two services are already a coupled merchant stack, so boundary value is limited.",
+      "impact": "Cross-service tampering within the btcpay/nbxplorer pair after a btcpayserver compromise.",
+      "recommendation": "Consider a read-only bind of just the cookie path for btcpayserver, or 0750 on the datadir plus a group-readable cookie, if the pair is ever decoupled.",
+      "status": "accepted-upstream-design"
+    },
+    {
+      "id": "F-7",
+      "severity": "low",
+      "title": "makePasswordSecret guards on file existence only; an interrupted write can strand an empty secret forever",
+      "component": "modules/secrets/secrets.nix",
+      "location": "modules/secrets/secrets.nix:99-101 ([[ -e $1 ]] || pwgen -s 20 1 > \"$1\")",
+      "description": "pwgen writes directly to the final file. If the first-ever generation is interrupted (disk full, crash), a zero-length or truncated password file exists and is never regenerated, because the guard only checks -e. Downstream rpcauth/wallet password consumers then run with a weak or empty secret. Inherited from upstream; edge case.",
+      "impact": "Silently weak credentials after an interrupted first boot.",
+      "recommendation": "Guard with [[ -s $1 ]] (non-empty) and write via temp file + mv, matching the atomic-rename pattern already used elsewhere in this repo.",
+      "status": "open"
+    }
+  ]
+}

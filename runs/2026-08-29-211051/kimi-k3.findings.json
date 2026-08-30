@@ -1,0 +1,62 @@
+{
+  "audit": {
+    "repo": "ostermayer/nix-bitcoin (fork)",
+    "commit": "8c86b9162db823c15b26d53dc53a5d68b330761f",
+    "date": "2026-08-29",
+    "scope": "modules/, pkgs/, helper/, .github/, test/ci, dev/, examples/, docs/"
+  },
+  "findings": [
+    {
+      "id": "F1",
+      "severity": "low",
+      "status": "open-known",
+      "title": "lnd REST bound to 0.0.0.0 under wireguard preset; accept rule not interface-scoped",
+      "location": "modules/presets/wireguard.nix (services.lnd.restAddress, networking.firewall.extraCommands)",
+      "detail": "Enabling lndconnect with the wireguard preset sets restAddress=0.0.0.0 and tor.enforce=false, so the macaroon-admin REST API is protected only by the nixos-fw accept rule for the wg subnet, which matches source subnet without '-i wg-nb'. Spoofed-source packets on the external interface are kept out by rp_filter/routing, and TCP cannot complete a blind handshake, so practical impact is near nil. Deliberately deferred with a breakage checklist in docs/wireguard-rest-bind.md; the recommended shape (extra restlisten via extraConfig, keep restAddress local) is documented there.",
+      "recommendation": "Work the docs/wireguard-rest-bind.md checklist; scope the accept rule with -i wg-nb when touching it."
+    },
+    {
+      "id": "F2",
+      "severity": "info",
+      "status": "open",
+      "title": "test.yml lacks a top-level permissions block",
+      "location": ".github/workflows/test.yml",
+      "detail": "The other two workflows set least-privilege GITHUB_TOKEN permissions; test.yml relies on repo defaults. The job never uses the token and actions are SHA-pinned, so residual risk is small; fork PRs get a read-only token regardless.",
+      "recommendation": "Add 'permissions: { contents: read }' for consistency with the repo's own CI posture."
+    },
+    {
+      "id": "F3",
+      "severity": "info",
+      "status": "open",
+      "title": "Trim residue: dead code and stale references",
+      "location": "modules/netns-isolation.nix:98 (dead mkCliExec); examples/deploy-krops.sh, examples/deploy-container.sh (invoke removed lightning-cli); SECURITY.md (references deleted helper/push-release.sh)",
+      "detail": "No security impact, but the fork's security model is aggressive deletion; leftovers erode it and the demo scripts now print a failing command.",
+      "recommendation": "Delete mkCliExec, drop the lightning-cli demo lines, update SECURITY.md."
+    },
+    {
+      "id": "F4",
+      "severity": "info",
+      "status": "open",
+      "title": "Docs show rpc.address=0.0.0.0 / allowip 0.0.0.0/0 without scoping caveat",
+      "location": "docs/configuration.md (~L95-113)",
+      "detail": "The example exposes bitcoind RPC at whatever scope the operator's firewall permits; the 'public' RPC user intentionally retains getpeerinfo/getnodeaddresses (lnd health checks), which leaks peer topology at that scope. Authentication is HMAC with ~119-bit passwords, so this is a documentation caveat, not a vulnerability.",
+      "recommendation": "Add one sentence noting the public whitelist's exposure scope follows the firewall rule."
+    },
+    {
+      "id": "V1",
+      "severity": "none",
+      "status": "verified-fixed",
+      "title": "HEAD-adjacent security commits re-verified",
+      "location": "test/ci/cve-scan.sh, pkgs/btcpayserver/, pkgs/overrides.nix, pkgs/lndinit/, modules/onion-addresses.nix, modules/lnd.nix, pkgs/netns-exec/, modules/secrets/secrets.nix",
+      "detail": "cve-scan fail-open fixes correct (affected_by-only filter; rc/JSON fail-closed). btcpayserver 2.4.3 override correctly re-calls the package function and is version-guarded. Onion-hostname validation fails closed against multi-line config injection and closes the check-then-read TOCTOU. Macaroon staging uses root-only mktemp dir + atomic rename. netns-exec: exact whitelist, absolute-path exec, caps dropped. Secrets: no argv passwords, escaped interpolations, unknown files locked to root:0440. lnd custom-macaroon hex-decode pipeline confirmed exercised by the btcpayserver VM test."
+    }
+  ],
+  "summary": {
+    "critical": 0,
+    "high": 0,
+    "medium": 0,
+    "low": 1,
+    "info": 3,
+    "note": "The only low (F1) is already documented and deliberately deferred with a correct analysis. The fork's audit-driven hygiene (version-guarded overrides, fail-closed CI scanning, per-CVE whitelist scoping) is in good shape at this commit; flake pins are ~7-10 days old, consistent with the stated weekly cadence."
+  }
+}
