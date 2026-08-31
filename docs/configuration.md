@@ -93,6 +93,13 @@ networking.firewall.allowedTCPPorts = [ config.services.bitcoind.port ];
 
 ## Allow bitcoind RPC connections from LAN
 
+> **Warning.** This example opens the RPC listener wide. `rpc.address =
+> "0.0.0.0"` binds every interface, and `"0.0.0.0/0"` in `rpc.allowip` allows
+> every source address. The firewall is then the only limit on who can reach
+> the RPC port. Scope both to your LAN: bind the LAN interface address and list
+> only your LAN subnet in `allowip`. The public RPC whitelist restricts which
+> methods a caller may use; it does not restrict who can connect.
+
 ```nix
 services.bitcoind = {
   # Listen to RPC connections on all interfaces

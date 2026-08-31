@@ -178,17 +178,16 @@ You can also build Nix from source by following the instructions at https://nixo
     sudo apt-get install curl git gnupg2 dirmngr
     ```
 
-2. Install latest Nix in "multi-user mode" with GPG Verification according to https://nixos.org/nix/download.html
+2. Install a current multi-user Nix. Follow the official installer and its
+   verification steps at https://nixos.org/download.
 
     ```
-    curl -o install-nix-2.3.10 https://releases.nixos.org/nix/nix-2.3.10/install
-    curl -o install-nix-2.3.10.asc https://releases.nixos.org/nix/nix-2.3.10/install.asc
-    gpg2 --recv-keys B541D55301270E0BCF15CA5D8170B4726D7198DE
-    gpg2 --verify ./install-nix-2.3.10.asc
-    sh ./install-nix-2.3.10 --daemon
+    curl -L https://nixos.org/nix/install | sh -s -- --daemon
     ```
 
-    Then follow the instructions. Open a new terminal window when you're done.
+    This fork is a flake. Enable the flake features. Add the line
+    `experimental-features = nix-command flakes` to `/etc/nix/nix.conf`, then
+    restart the `nix-daemon`. Open a new terminal window when you are done.
 
     If you get an error similar to
 

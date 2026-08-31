@@ -82,6 +82,8 @@ specific revision and review changes before advancing it.
 `bitcoind` source tarballs are additionally verified against the Bitcoin
 Core `guix.sigs` keyring at build time.
 
-Note: the upstream tarball-release helpers (`helper/push-release.sh`,
-`helper/fetch-release`) are not used by this fork and still reference the
-original maintainer's GPG key. Do not rely on them.
+Note: the upstream tarball-release helper `helper/fetch-release` is not used by
+this fork. It fetches upstream fort-nix releases and references the original
+maintainer's GPG key. It refuses to run unless `NIX_BITCOIN_FETCH_UPSTREAM=1`
+is set, and it points at the flake pin instead. Do not rely on it. This fork
+releases through CalVer tags on the `release` branch (`release-tag.yml`).

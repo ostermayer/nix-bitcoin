@@ -14,7 +14,6 @@ static char *allowed_netns[] = {
     "nb-bitcoind",
     "nb-lnd",
     "nb-electrs",
-    "nb-nginx",
     "nb-nbxplorer",
     "nb-btcpayserver"
 };

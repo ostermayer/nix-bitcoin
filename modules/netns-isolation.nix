@@ -94,8 +94,6 @@ let
   iptables = "${config.networking.firewall.package}/bin/iptables";
 
   bridgeIp = "169.254.${toString cfg.addressblock}.10";
-
-  mkCliExec = service: "exec netns-exec ${netns.${service}.netnsName}";
 in {
   inherit options;
 
@@ -227,7 +225,7 @@ in {
   {
     nix-bitcoin.netns-isolation.services = {
       # ids of services removed in the fork trim stay reserved:
-      # 13 clightning, 15 liquidd, 22 lightning-loop, 25 joinmarket,
+      # 13 clightning, 15 liquidd, 21 nginx, 22 lightning-loop, 25 joinmarket,
       # 26 joinmarket-ob-watcher, 27 lightning-pool, 28 charge-lnd, 29 rtl,
       # 30 clightning-rest, 31 fulcrum, 32 mempool.
       bitcoind = {
@@ -240,9 +238,6 @@ in {
       electrs = {
         id = 16;
         connections = [ "bitcoind" ];
-      };
-      nginx = {
-        id = 21;
       };
       nbxplorer = {
         id = 23;

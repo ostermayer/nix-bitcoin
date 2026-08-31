@@ -115,8 +115,8 @@ echo
 echo "Bitcoind network:"
 c bitcoin-cli getnetworkinfo
 echo
-echo "lightning-cli state:"
-c lightning-cli getinfo
+echo "lnd state:"
+c lncli getinfo
 echo
 echo "Node info:"
 c nodeinfo

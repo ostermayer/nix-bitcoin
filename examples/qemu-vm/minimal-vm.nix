@@ -43,7 +43,7 @@ rec {
           systemctl status bitcoind
           systemctl status lnd
           bitcoin-cli -getinfo
-          lightning-cli getinfo
+          lncli getinfo
       '';
 
       # Power off VM when the user exits the shell
