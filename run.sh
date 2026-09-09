@@ -17,6 +17,12 @@
 # leak a key into the public branch.
 #
 # Usage: run.sh [ref] [model ...]        (default: origin/release, kimi-k3 glm-5p3)
+#   model = [provider/]id[:thinking]. Bare ids are Fireworks models
+#   (accounts/fireworks/models/<id>); `openai/gpt-6-astra:xhigh` runs GPT-6
+#   Astra through the OpenAI API (OPENAI_API_KEY in secrets.env),
+#   `openai-codex/gpt-6-astra:xhigh` through a ChatGPT/Codex login stored in
+#   pi's auth.json. A missing :thinking falls back to FORK_AUDIT_THINK.
+#   Gate config since 2026-09-09: kimi-k3:max glm-5p3:max openai/gpt-6-astra:xhigh
 # Env:   FORK_AUDIT_THINK=high  FORK_AUDIT_TIMEOUT=3600  FORK_AUDIT_NO_PUBLISH=1
 #
 # shellcheck disable=SC2016  # jq programs use single quotes intentionally
@@ -33,7 +39,19 @@ THINK="${FORK_AUDIT_THINK:-medium}"   # high wanders to ~40min/model; medium is 
 # could prompt-inject the model, and network tools widen the exfil surface.
 TOOLS="read,bash,grep,git_status,git_diff,git_log"
 REF="${1:-origin/release}"; shift || true
-MODELS=("$@"); [ ${#MODELS[@]} -gt 0 ] || MODELS=(kimi-k3 glm-5p3)
+SPECS=("$@"); [ ${#SPECS[@]} -gt 0 ] || SPECS=(kimi-k3 glm-5p3)
+# Resolve each spec into parallel arrays: short name (file tag), provider,
+# full model id, thinking level.
+MODELS=(); PROVS=(); MIDS=(); THINKS=()
+for spec in "${SPECS[@]}"; do
+  t="$THINK"; case "$spec" in *:*) t="${spec##*:}"; spec="${spec%:*}";; esac
+  case "$spec" in
+    */*) prov="${spec%%/*}"; id="${spec#*/}";;
+    *)   prov=fireworks; id="accounts/fireworks/models/$spec";;
+  esac
+  MODELS+=("${id##*/}"); PROVS+=("$prov"); MIDS+=("$id"); THINKS+=("$t")
+done
+describe_models() { local i; for i in "${!MODELS[@]}"; do printf '%s%s (%s, thinking=%s)' "$([ "$i" -gt 0 ] && echo ', ')" "${MODELS[$i]}" "${PROVS[$i]}" "${THINKS[$i]}"; done; }
 
 export PATH="$HOME/.npm-global/bin:/nix/var/nix/profiles/default/bin:$PATH"
 # Load secrets as NON-exported shell vars, then export ONLY the low-impact
@@ -44,6 +62,9 @@ export PATH="$HOME/.npm-global/bin:/nix/var/nix/profiles/default/bin:$PATH"
 # shellcheck disable=SC1091  # runtime secrets file, not present at lint time
 . "$HOME/.config/fork-audit/secrets.env"
 export FIREWORKS_API_KEY
+# Same class of secret as the Fireworks key: a spend-capped inference key with
+# no access to funds or infrastructure. Only exported when set.
+[ -n "${OPENAI_API_KEY:-}" ] && export OPENAI_API_KEY
 ALERT_TO="${ALERT_TO:-dan@ostermayer.co}"
 ALERT_FROM="${ALERT_FROM:-nix-bitcoin fork audit <hi@lnzap.org>}"
 have() { command -v "$1" >/dev/null; }
@@ -64,7 +85,7 @@ git -C "$SRC" remote remove origin 2>/dev/null || true    # no push path for too
 # the audited code tree — releases stay clean of audit tooling.
 PROMPT="${FORK_AUDIT_PROMPT:-$HERE/prompt.md}"
 [ -f "$PROMPT" ] || { log "no prompt.md next to run.sh ($PROMPT)"; exit 1; }
-log "auditing $AUDITED_SHA · models: ${MODELS[*]} · thinking=$THINK"
+log "auditing $AUDITED_SHA · models: $(describe_models)"
 
 TASK="You are auditing the nix-bitcoin fork checked out in the current directory ($SRC), at commit $AUDITED_SHA. Follow your security-audit brief exactly. Map the surface, investigate the highest-value targets, and end with the JSON findings array."
 
@@ -77,9 +98,10 @@ NORM='def fo: if type=="array" then . elif (type=="object" and ((.findings?|type
 # failure must fail the run loudly, never publish a misleading "0 findings".
 PARSE_FAIL=0
 
-for m in "${MODELS[@]}"; do
-  mid="accounts/fireworks/models/$m"; raw="$OUT/$m.raw.txt"; fj="$OUT/$m.findings.json"
-  log "=== $m ==="
+for i in "${!MODELS[@]}"; do
+  m="${MODELS[$i]}"; prov="${PROVS[$i]}"; mid="${MIDS[$i]}"; think="${THINKS[$i]}"
+  raw="$OUT/$m.raw.txt"; fj="$OUT/$m.findings.json"
+  log "=== $m ($prov, thinking=$think) ==="
   # Run the model inside a bwrap sandbox. Allowlist, not denylist: the whole of
   # $HOME is masked with a tmpfs, and ONLY what the audit needs is re-exposed —
   # pi's binary (~/.npm-global, read-only), pi's config (~/.pi/agent, via a
@@ -100,7 +122,7 @@ for m in "${MODELS[@]}"; do
         --ro-bind "$SRC" "$SRC" \
         --overlay-src "$HOME/.pi/agent" --tmp-overlay "$HOME/.pi/agent" \
         --chdir "$SRC" \
-        -- pi -p --provider fireworks --model "$mid:$THINK" --tools "$TOOLS" \
+        -- pi -p --provider "$prov" --model "$mid:$think" --tools "$TOOLS" \
              --append-system-prompt "$PROMPT" "$TASK" ) > "$raw" 2> "$OUT/$m.stderr" \
     || log "$m exited nonzero (partial output kept)"
   extract_json "$raw" > "$fj.raw"
@@ -141,7 +163,7 @@ corrob=$(JQ '[group_by(.file+"|"+(.title//""))[]|select(length>1)]|length' "$MER
 {
   echo "# Adversarial LLM audit — $STAMP"; echo
   echo "- Commit audited: \`$AUDITED_SHA\` (ref \`$REF\`)"
-  echo "- Models: ${MODELS[*]} (Fireworks, thinking=$THINK)"
+  echo "- Models: $(describe_models)"
   echo "- Prompt: the exact brief used is saved next to this report as \`prompt.used.md\`"
   echo "- Findings: **$total** total · $crit critical · $high high · $corrob flagged by >1 model"; echo
   [ "$PARSE_FAIL" -ne 0 ] && echo "> ⚠ PARSE FAILURE — at least one model's findings could not be parsed. The counts above are INCOMPLETE. Read the per-model transcripts before trusting this report." && echo
@@ -171,7 +193,7 @@ for f in "${PUBFILES[@]}"; do [ -f "$f" ] || continue
     log "PRIVATE-KEY BLOCK in $f — refusing to publish"; LEAK=1
   fi
 done
-secrets=("${FIREWORKS_API_KEY:-}" "${BRAVE_API_KEY:-}" "${EXA_API_KEY:-}" "${RESEND_API_KEY:-}")
+secrets=("${FIREWORKS_API_KEY:-}" "${OPENAI_API_KEY:-}" "${BRAVE_API_KEY:-}" "${EXA_API_KEY:-}" "${RESEND_API_KEY:-}")
 for k in "$DEPLOY_KEY" "$SIGN_KEY"; do [ -f "$k" ] && secrets+=("$(cat "$k")"); done
 redact_lines() {  # $1=secret value (maybe multi-line), $2=file
   while IFS= read -r line; do

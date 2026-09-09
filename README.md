@@ -11,7 +11,7 @@ Every adversarial-LLM security review of the fork is published under [`runs/`](r
 - `<model>.raw.txt` — the **full model transcript** (nothing cherry-picked)
 - `prompt.used.md` — the exact brief that produced this run
 
-Findings are **advisory input to human review, never an automatic gate**: each is triaged into real / false-positive / accepted-risk, reals are fixed, and every fix re-runs the whole review. Two independent models (Kimi K3 + GLM-5.2) run at max reasoning; items flagged by both are corroborated.
+Findings are **advisory input to human review, never an automatic gate**: each is triaged into real / false-positive / accepted-risk, reals are fixed, and every fix re-runs the whole review. Three independent models run it — Kimi K3 and GLM 5.3 (Fireworks) at max reasoning, and GPT-6 Astra (OpenAI) at xhigh — so items flagged by more than one model are corroborated across three different labs' models.
 
 ## Have the suite
 
@@ -20,10 +20,11 @@ The two files here are all you need to run the same review yourself:
 - [`prompt.md`](prompt.md) — the adversarial audit brief. **PRs to improve it are welcome** — if you can make the models find more real bugs or fewer false positives, open a PR (ideally with a before/after run).
 - [`run.sh`](run.sh) — the runner: it checks out the fork read-only, runs each model inside a **bwrap sandbox** (the model's shell can't read the operator's SSH keys or secrets — see the header comments), extracts structured findings, scrubs output fail-closed for any secret, and publishes here.
 
-It's wired for the maintainer's environment (needs the [`pi`](https://github.com/earendil-works/pi) agent, a Fireworks API key in `~/.config/fork-audit/secrets.env`, and `bwrap`), but the paths are env-overridable and the shape is easy to adapt:
+It's wired for the maintainer's environment (needs the [`pi`](https://github.com/earendil-works/pi) agent, Fireworks and OpenAI API keys in `~/.config/fork-audit/secrets.env` (pi 0.84.x has no catalog entry for `gpt-6-astra` yet, so add one to `~/.pi/agent/models.json`), and `bwrap`), but the paths are env-overridable and the shape is easy to adapt:
 
 ```bash
-./run.sh origin/release kimi-k3 glm-5p2
+./run.sh origin/release kimi-k3:max glm-5p3:max openai/gpt-6-astra:xhigh
+# model = [provider/]id[:thinking]; bare ids are Fireworks models
 ```
 
 ## Secret safety
