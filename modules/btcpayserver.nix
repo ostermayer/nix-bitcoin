@@ -183,6 +183,10 @@ in {
         Restart = "on-failure";
         RestartSec = "10s";
         ReadWritePaths = [ cfg.nbxplorer.dataDir ];
+        # .NET's JIT needs writable+executable pages, so W^X enforcement cannot
+        # be enabled for NBXplorer or BTCPay. Accepted trade-off (audit
+        # 2026-08-29, low): the remaining sandbox (nbLib.defaultHardening,
+        # netns/Tor policy, dedicated users) is unchanged.
         MemoryDenyWriteExecute = false;
       } // nbLib.allowedIPAddresses cfg.nbxplorer.tor.enforce;
     };
@@ -231,7 +235,7 @@ in {
         # Restart rate limiting is implemented via the `startLimit*` options below.
         Restart = "always";
         ReadWritePaths = [ cfg.btcpayserver.dataDir ];
-        MemoryDenyWriteExecute = false;
+        MemoryDenyWriteExecute = false; # .NET JIT; see the nbxplorer note above
       } // nbLib.allowedIPAddresses cfg.btcpayserver.tor.enforce;
       startLimitIntervalSec = 30;
       startLimitBurst = 10;

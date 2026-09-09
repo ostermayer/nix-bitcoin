@@ -152,7 +152,12 @@ in {
 
       extraCommands =
         optionalString lndconnect ''
-          iptables -w -A nixos-fw -p tcp -s ${wgSubnet}.0/24 --dport ${toString lnd.restPort} -j nixos-fw-accept
+          # Admit lnd REST only from the single WireGuard peer, and only when the
+          # packet actually arrived over the wg-nb interface. `-s` alone matches
+          # a spoofed source on any interface; `-i` pins it to the tunnel (audit
+          # 2026-08-29, low). This is the interim hardening while the
+          # 0.0.0.0 bind itself stays deferred (see docs/wireguard-rest-bind.md).
+          iptables -w -A nixos-fw -i wg-nb -p tcp -s ${peerAddress}/32 --dport ${toString lnd.restPort} -j nixos-fw-accept
         ''
         + optionalString cfg.restrictPeer ''
           iptables -w -A nixos-fw ${restrictPeerRule}

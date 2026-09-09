@@ -224,9 +224,11 @@ in {
           '') cfg.secrets)
         }
 
-        # Make all other files accessible to root only
+        # Make all other files accessible to root only.
+        # dotglob: a stray `.something` in the secrets dir must be locked down
+        # too, not skipped by the glob (audit 2026-08-30, low).
         unprocessedFiles=$(
-          comm -23 <(shopt -s nullglob; printf '%s\n' *) <(printf '%s\n' "''${processedFiles[@]}")
+          comm -23 <(shopt -s nullglob dotglob; printf '%s\n' * | sort) <(printf '%s\n' "''${processedFiles[@]}" | sort)
         )
         if [[ $unprocessedFiles ]]; then
           IFS=$'\n'

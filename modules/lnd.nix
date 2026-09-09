@@ -286,12 +286,17 @@ in {
               # read — and grants no access lnd does not already have. (The write
               # path above is already symlink-hardened; this closes the read.)
               adminMacaroonHex=$(${pkgs.util-linux}/bin/runuser -u ${cfg.user} -- ${pkgs.xxd}/bin/xxd -ps -u -c 99999 '${networkDir}/admin.macaroon')
+              # The response body is lnd-controlled. A macaroon is a few hundred
+              # bytes, so cap what this root script will buffer and write to the
+              # /run tmpfs at 64 KiB, and fail (jq -e) rather than write garbage
+              # when the reply carries no `.macaroon` (audit 2026-08-30, low).
               ${curl} \
                 -H @<(printf 'Grpc-Metadata-macaroon: %s\n' "$adminMacaroonHex") \
                 -X POST \
                 -d '{"permissions":[${cfg.macaroons.${macaroon}.permissions}]}' \
                 ${restUrl}/macaroon |\
-                ${pkgs.jq}/bin/jq -c '.macaroon' | ${pkgs.xxd}/bin/xxd -p -r > "$macaroonTmp"
+                ${pkgs.coreutils}/bin/head -c 65536 |\
+                ${pkgs.jq}/bin/jq -ce '.macaroon | strings' | ${pkgs.xxd}/bin/xxd -p -r > "$macaroonTmp"
               chown ${cfg.macaroons.${macaroon}.user}: "$macaroonTmp"
               ${pkgs.coreutils}/bin/mv -f "$macaroonTmp" "$RUNTIME_DIRECTORY/${macaroon}.macaroon"
             '') (attrNames cfg.macaroons)}
