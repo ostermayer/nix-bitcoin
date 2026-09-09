@@ -220,11 +220,27 @@ You can also build Nix from source by following the instructions at https://nixo
     cp -r ../nix-bitcoin/examples/{configuration.nix,shell.nix,krops,.gitignore} .
     ```
 
-3. Obtain the hash of the latest nix-bitcoin release
+3. Pin the fork release to deploy
+
+    This is a maintained fork: do **not** use upstream fort-nix release
+    tarballs (they lack the fork's fixes; `helper/fetch-release` refuses to
+    run for that reason). Pin a commit of this fork instead — the deployment
+    shell's `update-nix-bitcoin` command writes `nix-bitcoin-release.nix` for
+    you from the latest `release` tag, or do it by hand:
 
     ```
-    ../nix-bitcoin/helper/fetch-release > nix-bitcoin-release.nix
+    commit=$(git -C ../nix-bitcoin rev-parse release)   # or any reviewed commit
+    hash=$(nix-prefetch-url --unpack "https://github.com/ostermayer/nix-bitcoin/archive/$commit.tar.gz")
+    cat > nix-bitcoin-release.nix <<EOF
+    builtins.fetchTarball {
+      url = "https://github.com/ostermayer/nix-bitcoin/archive/$commit.tar.gz";
+      sha256 = "$hash";
+    }
+    EOF
     ```
+
+    Release tags are unsigned CI pointers; the commit is what you review and
+    pin (see `SECURITY.md`).
 
 #### Optional: Specify the system of your node
 This enables evaluating your node config on a machine that has a different system platform

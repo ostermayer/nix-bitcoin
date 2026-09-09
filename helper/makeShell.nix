@@ -63,15 +63,27 @@ pkgs.stdenv.mkDerivation {
     }
 
     update-nix-bitcoin() {(
+      # Fork-native pin: resolve the fork's latest CalVer release tag to the
+      # commit it points at, prefetch that commit's tarball and rewrite
+      # nix-bitcoin-release.nix. Never fetches upstream fort-nix releases
+      # (they lack this fork's fixes). Tags are unsigned CI pointers — the
+      # commit is what you review; see SECURITY.md.
       set -euo pipefail
       releaseFile="${cfgDir}/nix-bitcoin-release.nix"
+      repo=https://github.com/ostermayer/nix-bitcoin
+      tag=$(git ls-remote --tags --refs "$repo" 'refs/tags/20*' | sed 's|.*refs/tags/||' | sort -V | tail -n1)
+      [[ $tag ]] || { echo "No release tag found on $repo" >&2; exit 1; }
+      commit=$(git ls-remote "$repo" "refs/tags/$tag^{}" | cut -f1)
+      [[ $commit ]] || commit=$(git ls-remote "$repo" "refs/tags/$tag" | cut -f1)
+      url="$repo/archive/$commit.tar.gz"
+      hash=$(nix-prefetch-url --unpack "$url" 2>/dev/null)
+      new=$(printf 'builtins.fetchTarball {\n  # fork release %s\n  url = "%s";\n  sha256 = "%s";\n}\n' "$tag" "$url" "$hash")
       current=$(cat "$releaseFile" 2>/dev/null || true)
-      new=$(fetch-release)
-      if [[ $new == $current ]]; then
-        echo "nix-bitcoin-release.nix already contains the latest release"
+      if [[ $new == "$current" ]]; then
+        echo "nix-bitcoin-release.nix already pins $tag ($commit)"
       else
-        echo "$new" > "$releaseFile"
-        echo "Updated nix-bitcoin-release.nix"
+        printf '%s' "$new" > "$releaseFile"
+        echo "Pinned $tag ($commit) in nix-bitcoin-release.nix — review that commit before deploying"
         if [[ $isInteractive ]]; then
           exec nix-shell
         fi

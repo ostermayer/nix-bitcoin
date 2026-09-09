@@ -160,8 +160,14 @@ in {
           iptables -w -A nixos-fw -i wg-nb -p tcp -s ${peerAddress}/32 --dport ${toString lnd.restPort} -j nixos-fw-accept
         ''
         + optionalString cfg.restrictPeer ''
-          iptables -w -A nixos-fw ${restrictPeerRule}
-          iptables -w -A FORWARD ${restrictPeerRule}
+          # Insert at the top: appended (-A) the REJECT would sit behind the
+          # standard accept rules (allowed ports, the REST accept above), so a
+          # peer could still reach any firewall-allowed port on the node's
+          # other addresses through the tunnel (second opinion 2026-09-09).
+          # Replies to server-initiated traffic are unaffected: their
+          # destination is serverAddress.
+          iptables -w -I nixos-fw 1 ${restrictPeerRule}
+          iptables -w -I FORWARD 1 ${restrictPeerRule}
         '';
 
       extraStopCommands =

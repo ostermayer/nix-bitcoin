@@ -1,4 +1,5 @@
-# Representative nix-bitcoin node with all shipped services enabled.
+# Representative nix-bitcoin node: the secure-node preset plus every shipped
+# service and backups — i.e. the recommended deployment.
 #
 # CVE-scan target (test/ci/cve-scan.sh): vulnix scans this system's RUNTIME
 # closure — the software a user actually runs (bitcoind, lnd, electrs,
@@ -15,8 +16,16 @@ in
   system = "x86_64-linux";
   modules = [
     f.nixosModules.default
+    # The recommended deployment, not the bare service set: secure-node pulls
+    # in tor (client + onion services — the largest continuously exposed
+    # parsing surface on a real node), the operator/doas setup and the preset
+    # infrastructure; backups adds duplicity. Without these the scan silently
+    # skipped exactly the components a deployed node exposes (audit
+    # 2026-09-09, medium).
+    "${f.outPath}/modules/presets/secure-node.nix"
     {
       nix-bitcoin.generateSecrets = true;
+      services.backups.enable = true;
       services.bitcoind.enable = true;
       services.lnd.enable = true;
       services.electrs.enable = true;

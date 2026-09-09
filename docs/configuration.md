@@ -15,7 +15,11 @@ You now have access to deployment commands:
 
 ## Updating nix-bitcoin
 Run `update-nix-bitcoin` from the deployment shell.\
-This fetches the latest release, verifies its signatures and updates `nix-bitcoin-release.nix`.
+This resolves the fork's latest `release` tag to its commit, prefetches that
+commit's tarball hash and rewrites `nix-bitcoin-release.nix`. Review the diff
+of the pinned commit before deploying — tags are unsigned pointers, commits
+are signed (see `SECURITY.md`). Flake users: `nix flake update nix-bitcoin`
+against `github:ostermayer/nix-bitcoin/release` instead.
 
 # Customizing your configuration
 

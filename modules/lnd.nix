@@ -298,7 +298,11 @@ in {
                 ${pkgs.coreutils}/bin/head -c 65536 |\
                 ${pkgs.jq}/bin/jq -ce '.macaroon | strings' | ${pkgs.xxd}/bin/xxd -p -r > "$macaroonTmp"
               chown ${cfg.macaroons.${macaroon}.user}: "$macaroonTmp"
-              ${pkgs.coreutils}/bin/mv -f "$macaroonTmp" "$RUNTIME_DIRECTORY/${macaroon}.macaroon"
+              # -T: the destination is a path lnd controls; without -T a
+              # symlink-to-directory planted there would make root move the
+              # file INTO that directory under the fixed basename instead of
+              # replacing the path (second opinion 2026-09-09).
+              ${pkgs.coreutils}/bin/mv -fT -- "$macaroonTmp" "$RUNTIME_DIRECTORY/${macaroon}.macaroon"
             '') (attrNames cfg.macaroons)}
           '';
         in [

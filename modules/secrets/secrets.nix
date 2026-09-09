@@ -175,12 +175,35 @@ in {
     #  - Make all other secrets accessible to root only
     # For all steps make sure that no secrets are copied to the nix store.
     #
+    # The secrets dir must exist before the sandboxed service starts:
+    # ReadWritePaths= refuses a missing path.
+    systemd.tmpfiles.rules = mkIf cfg.setupSecrets [
+      "d '${cfg.secretsDir}' 0700 root root - -"
+    ];
+
     systemd.services.setup-secrets = mkIf cfg.setupSecrets {
       requiredBy = [ "nix-bitcoin-secrets.target" ];
       before = [ "nix-bitcoin-secrets.target" ];
       serviceConfig = {
          Type = "oneshot";
          RemainAfterExit = true;
+         # Scoped root sandbox (audit 2026-09-09, low): this is the one root
+         # service that generates and re-permissions every secret on the box.
+         # It needs to write exactly one directory and to chown/chmod files it
+         # does not own — nothing else. No network, no new privileges, no
+         # writable / outside the secrets dir.
+         ProtectSystem = "strict";
+         ReadWritePaths = [ cfg.secretsDir ];
+         ProtectHome = true;
+         PrivateTmp = true;
+         NoNewPrivileges = true;
+         RestrictAddressFamilies = [ "AF_UNIX" ];
+         RestrictNamespaces = true;
+         LockPersonality = true;
+         ProtectKernelTunables = true;
+         ProtectKernelModules = true;
+         ProtectControlGroups = true;
+         CapabilityBoundingSet = [ "CAP_CHOWN" "CAP_FOWNER" "CAP_DAC_OVERRIDE" "CAP_DAC_READ_SEARCH" ];
       };
       script = ''
         # Use the same sort order for globbing and sorting as in Nix attrsets.

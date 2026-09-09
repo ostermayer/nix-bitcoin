@@ -69,10 +69,13 @@ PRs to improve the audit prompt are welcome.
 
 ## Release Integrity
 
-Commits and tags on this fork are signed with the maintainer's SSH key.
-GitHub shows verified commits as "Verified"; to verify locally, add the
-maintainer's public signing key to an SSH allowed-signers file and run
-`git log --show-signature` or `git verify-commit <rev>`.
+Commits on this fork are signed with the maintainer's SSH key. GitHub shows
+them as "Verified"; to verify locally, add the maintainer's public signing key
+to an SSH allowed-signers file and run `git log --show-signature` or
+`git verify-commit <rev>`. The CalVer release tags are created by CI
+(`release-tag.yml`) as annotated but **unsigned** tags — a tag name is a
+convenience pointer, not a signature. Verify the *commit* a tag points at, and
+pin by commit hash + `narHash` (below) rather than by tag name.
 
 Because this fork is consumed as a flake input, integrity ultimately comes
 from your `flake.lock`: it records the exact commit and its content hash

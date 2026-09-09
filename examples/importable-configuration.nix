@@ -7,9 +7,14 @@
 
 let
   # FIXME:
-  # Overwrite `builtins.fetchTarball {}` with the output of
-  # command ../helper/fetch-release
-  nix-bitcoin = builtins.fetchTarball {};
+  # Pin a commit of this fork (NOT an upstream fort-nix release — those lack
+  # the fork's fixes). Get the hash with
+  #   nix-prefetch-url --unpack https://github.com/ostermayer/nix-bitcoin/archive/<commit>.tar.gz
+  # or let `update-nix-bitcoin` in the deployment shell write it for you.
+  nix-bitcoin = builtins.fetchTarball {
+    url = "https://github.com/ostermayer/nix-bitcoin/archive/<commit>.tar.gz";
+    sha256 = "<hash>";
+  };
 in
 { config, pkgs, lib, ... }: {
   imports = [
