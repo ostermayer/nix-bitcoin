@@ -1,0 +1,111 @@
+All verification is done. The firewall module gates everything (including `extraCommands`) behind `mkIf cfg.enable`, confirming the last open question. Here is the audit report.
+
+---
+
+# Security audit — ostermayer/nix-bitcoin fork @ c021a3e441a3b7c21c2a75fe28d3f17f01fcdebd
+
+## Surface map
+
+The fork ships NixOS modules (not a flat package set), so the deployed attack surface is what the recommended preset builds. I mapped it as:
+
+- **Secrets pipeline** (`modules/secrets/secrets.nix`): generation (pwgen, openssl, rpcauth via file not argv), root `setup-secrets` service, deployment via krops/nixops.
+- **Root-privileged helpers**: `setup-secrets`, lnd macaroon `ExecStartPost` root script, `onion-addresses` service, netns setup services, `netns-exec` (C, cap_sys_admin wrapper).
+- **Services**: bitcoind, lnd, electrs, nbxplorer, btcpayserver, postgres, duplicity. All under `nbLib.defaultHardening`, dedicated users, localhost/netns binds.
+- **Exposure paths**: onion services (sshd, bitcoind, electrs, btcpay, lnd-rest), the wireguard preset (lnd REST on 0.0.0.0), the bitcoind public RPC whitelist.
+- **Supply chain**: flake.lock pins (nixpkgs 26.05 @ 93108a5, 2026-09-07), `pkgs/overrides.nix` security bumps, hash-pinned fetches, weekly vulnix scan of the runtime closure, CI VM suite, release tagging.
+
+I resolved the actual deployed closure by evaluation: bitcoind 31.1, lnd 0.21.3-beta, btcpayserver 2.4.3 (override active), nbxplorer 2.6.10, electrs 0.11.0, tor 0.4.9.11, postgresql 17.11, openssh 10.5p1, systemd 260.2, kernel 6.18.49.
+
+## Verified good (prior fixes hold)
+
+The two hardening commits (d22c5da, c021a3e) were the prime suspects for incomplete fixes. All of their claims check out:
+
+1. **lnd macaroon delivery** is now genuinely tight: staging in a root-only `mktemp -d /run/lnd-macaroons.XXXXXX` (lnd cannot enter /run itself), final delivery via atomic `mv -fT` rename that replaces a planted symlink instead of following it, `admin.macaroon` read as the lnd user via `runuser` so a planted symlink fails closed, 64 KiB cap on the lnd-controlled REST body, and `jq -ce` fail-closed that actually works because `nbLib.script` sets `pipefail`. There is even a runtime regression test (`lnd-macaroon-read-deprivileged` in tests.py) that proves the read-as-lnd asymmetry with a canary file.
+2. **setup-secrets sandbox**: `ProtectSystem=strict` with only the secrets dir writable, no network (AF_UNIX), `NoNewPrivileges`, capability set limited to chown/fowner/dac. The `+` prefix semantics work in its favor where needed.
+3. **wireguard rule ordering**: `-I nixos-fw 1` / `-I FORWARD 1` now precede the appended accept rules, and the REST accept is pinned to `-i wg-nb` plus the single peer /32. Reply traffic to server-initiated connections survives because its destination is serverAddress.
+4. **onion-addresses**: refuses symlinked hostname files, validates content as exactly one v3 onion address (load-bearing: those bytes are spliced into `externalip=` config lines, so this blocks config injection), builds output dirs as root and chowns last, `chown -h` throughout.
+5. **netns-exec**: absolute-path `execv`, capability return checks, nonzero exit on exec failure; wrapper is owner-only 0500.
+6. **CVE scan tooling**: scans the real recommended deployment's runtime closure (secure-node plus all services plus backups), fails closed on malformed reports and counting errors, and the whitelist entries are narrowly scoped per-CVE for name collisions.
+7. **Version pinning**: overrides are wired with correct precedence (`overrides > self > pinned`) and the btcpayserver 2.4.3 override demonstrably reaches the deployed closure. bitcoind and lnd are at upstream latest.
+8. No secrets land in the nix store; source fetches are hash-pinned and HTTPS-only; no curl-to-shell anywhere; the only `--insecure` in the tree is a test client; the upstream fetch-release helper refuses to run without an explicit override.
+
+## Findings
+
+**1. tor 0.4.9.11 misses security release 0.4.9.12 (medium).** Released 2026-09-08, one day after the pin and one day before this HEAD. Upstream calls it "another security release containing several high security fixes... We very strongly recommend upgrading as soon as possible." Client-relevant fixes include a hostile directory cache tricking the client into treating relay descriptors as unusable (TROVE-2026-034), a consensus-diff memory DoS class (TROVE-2026-042), and a UAF (TROVE-2026-043). tor is the largest continuously exposed parsing surface on the recommended node: all service traffic is proxied through it and it terminates inbound connections for five onion services. The weekly vulnix scan cannot catch this: tor tracks advisories as TROVE IDs, not NVD CVEs. The audit doc's subscription list (section 5) recommends feeds for Core, lnd, CLN, clboss, btcpay, RTL, but no tor feed. Fix: a version-guarded `pkgs/overrides.nix` entry for 0.4.9.12, and add tor-announce to the maintenance feeds.
+
+**2. btcpayserver 2.4.3 lags security release 2.4.4 (medium).** Released 2026-09-07 (same day as the pin). Upstream: "a new security-focused update that continues our work to harden the codebase... strengthens permissions and validation around invoices, API keys, server administration and other sensitive operations. We recommend that all server administrators update." The fork's own overrides.nix was written for 2.4.3 and pins exactly that, so the recommended deployment runs an internet-facing payment processor one security release behind. Same blindness as finding 1: no CVEs assigned. Fix: bump the override and regenerate the nuget lockfile per the documented procedure in pkgs/btcpayserver/default.nix. Context I verified: the in-the-wild `/lnd-rest/btc/v1/changepassword` attack described in the 2.4.4 post does not apply to this fork's shape, because lnd REST is never reverse-proxied publicly here and the wallet uses a per-node random password with startup auto-unlock. The gap is the application-layer fixes, not that endpoint.
+
+**3. wireguard preset binds lnd's admin REST to 0.0.0.0 with firewall-only protection, but never asserts the firewall is enabled (medium-low).** I confirmed in the pinned nixpkgs that the entire firewall module config, including `extraCommands` and `allowedUDPPorts`, sits behind `mkIf cfg.enable`. The preset's only assertion is the netns incompatibility check. A user config with `networking.firewall.enable = false` (common in VMs, containers, or behind an upstream firewall) gets the macaroon-admin REST API listening on every interface with no accept rule and no default-drop, and the preset evaluates cleanly. This compounds the already-tracked, deferred 0.0.0.0 bind in docs/wireguard-rest-bind.md. A one-line assertion (`networking.firewall.enable` when the wg lndconnect mode is active) is independent of the deferred rebind work and should land now.
+
+**4. no release-gating CI coverage for the wireguard preset (low).** The CI matrix is default/regtest/netns; test/ci/test-info.nix parses that list straight out of test.yml. `wireguard-lndconnect` exists only in run-tests.sh's local buildable list. The firewall rule fixes in this very commit (c021a3e) therefore have no regression protection on the path that gates the release branch. Add the scenario to the matrix.
+
+**5. dead code: fetchNodeModules (info).** `pkgs/build-support/fetch-node-modules.nix` survived the RTL removal; nothing consumes it except its own wiring in pkgs/default.nix, and the flake already strips it from exports. Build-time-only surface, but it is exactly the bloat the fork's own policy says to delete.
+
+Nothing else rose to finding level. The operator privilege model (cookie group access, doas to lnd) is documented by design. The public RPC whitelist is properly trimmed. The committed example VM key is upstream's standard throwaway demo key, dev-only.
+
+```json
+[
+  {
+    "id": "NB-FORK-2026-09-09-01",
+    "title": "Shipped tor 0.4.9.11 misses security release 0.4.9.12",
+    "severity": "medium",
+    "category": "supply-chain / stale pin",
+    "component": "tor (via nixpkgs 26.05 pin 93108a5, 2026-09-07)",
+    "location": "flake.lock (nixpkgs pin); fix belongs in pkgs/overrides.nix",
+    "description": "tor 0.4.9.12 was published 2026-09-08, one day after the pin and one day before the audited commit. Upstream: 'another security release containing several high security fixes... We very strongly recommend upgrading as soon as possible.' Client-relevant fixes: hostile directory cache marking relay descriptors unusable (TROVE-2026-034), consensus-diff memory DoS class (TROVE-2026-042), OOM use-after-free (TROVE-2026-043). tor carries all node traffic and terminates five inbound onion services on the recommended deployment.",
+    "evidence": "Deployed closure evaluates to tor 0.4.9.11; dist.torproject.org lists 0.4.9.12; gitlab ReleaseNotes for 0.4.9.12 confirm the security content and date 2026-09-08.",
+    "impact": "DoS and descriptor-poisoning exposure on the node's most-exposed daemon, requiring a malicious relay/cache position in the consensus. Anonymity degradation and availability loss are the realistic outcomes; RCE less so for a client-only node.",
+    "why_the_scan_missed_it": "tor advisories are tracked as TROVE IDs, not NVD CVEs, so the weekly vulnix scan is structurally blind to them.",
+    "recommendation": "Add a version-guarded override pinning tor 0.4.9.12 in pkgs/overrides.nix (the fork's stated policy for exactly this case). Add tor-announce to the subscription list in docs/security-audit-2026-08-14.md section 5, which currently lists no tor feed."
+  },
+  {
+    "id": "NB-FORK-2026-09-09-02",
+    "title": "btcpayserver 2.4.3 lags security release 2.4.4",
+    "severity": "medium",
+    "category": "supply-chain / stale override",
+    "component": "btcpayserver (pkgs/overrides.nix -> pkgs/btcpayserver)",
+    "location": "pkgs/overrides.nix; pkgs/btcpayserver/default.nix (version = \"2.4.3\", deps-2.4.3.json)",
+    "description": "BTCPay Server 2.4.4 (2026-09-07) is a security-focused update strengthening permissions and validation around invoices, API keys, server administration and other sensitive operations; upstream recommends all server administrators update. The fork's override was written for 2.4.3 (the previous security release) and pins exactly that, so the recommended deployment runs an internet-facing payment processor one security release behind.",
+    "evidence": "Deployed closure evaluates to btcpayserver 2.4.3; GitHub latest release is 2.4.4 published 2026-09-07T13:28:37Z; blog.btcpayserver.org/btcpay-server-2-4-4/ is titled 'BTCPay Server 2.4.4: Security Update'.",
+    "impact": "Application-layer permission and validation weaknesses in the web app reachable through the btcpayserver onion service. The in-the-wild /lnd-rest/btc/v1/changepassword attack from the same post does NOT apply to this fork: lnd REST is never reverse-proxied publicly here and the lnd wallet uses a per-node random password with startup auto-unlock.",
+    "why_the_scan_missed_it": "BTCPay advisories carry no CVEs, so vulnix cannot see them; the version-guarded override mechanism is the fork's intended channel but was not re-run against this release.",
+    "recommendation": "Bump the override to 2.4.4 with a regenerated nuget lockfile (procedure documented in pkgs/btcpayserver/default.nix). Fold 'check upstream release feed on every pin update' into the weekly routine for btcpayserver and nbxplorer."
+  },
+  {
+    "id": "NB-FORK-2026-09-09-03",
+    "title": "wireguard preset exposes lnd admin REST on 0.0.0.0 but never asserts the firewall is enabled",
+    "severity": "medium-low",
+    "category": "missing guard on a load-bearing assumption",
+    "component": "modules/presets/wireguard.nix",
+    "location": "modules/presets/wireguard.nix:97-101 (only assertion is netns incompatibility), :148-180 (firewall extraCommands), :192 (restAddress = \"0.0.0.0\")",
+    "description": "When lndconnect is enabled, the preset sets services.lnd.restAddress = \"0.0.0.0\" and relies entirely on the NixOS firewall (default-drop plus a scoped accept rule) for protection. The preset never asserts networking.firewall.enable. In the pinned nixpkgs, the entire firewall module config including extraCommands and allowedUDPPorts is gated behind mkIf cfg.enable, so with networking.firewall.enable = false anywhere in the user's config (VMs, containers, upstream-firewall setups) the macaroon-admin REST API listens on every interface with no filtering, and the preset evaluates cleanly.",
+    "evidence": "nixpkgs firewall.nix line 321: 'config = lib.mkIf cfg.enable'; wireguard.nix contains no firewall assertion; the code comment at line 182 states the port is 'guarded by the firewall' as an assumption.",
+    "impact": "Full admin REST API exposure (macaroon-authenticated endpoints, plus wallet-setup endpoints during the pre-unlock window) on all interfaces in misconfigured-but-plausible deployments. Compounds the tracked-and-deferred 0.0.0.0 bind in docs/wireguard-rest-bind.md.",
+    "recommendation": "Add an assertion that networking.firewall.enable is true whenever the wg lndconnect mode is active (or whenever restAddress would be 0.0.0.0). This is independent of, and much cheaper than, the deferred rebind work in docs/wireguard-rest-bind.md."
+  },
+  {
+    "id": "NB-FORK-2026-09-09-04",
+    "title": "wireguard preset has no release-gating CI coverage",
+    "severity": "low",
+    "category": "test coverage gap",
+    "component": "CI / test suite",
+    "location": ".github/workflows/test.yml (matrix: default, regtest, netns); test/ci/test-info.nix (derives scenario list from that matrix); test/run-tests.sh:302 (wireguard-lndconnect only in local buildable list)",
+    "description": "The firewall fixes in the audited commit itself (restrictPeer insert-at-top, interface-pinned REST accept) are only exercised by the wireguard-lndconnect scenario, which is not in the CI matrix that gates the release branch. The commit message cites a green local VM suite, but the release ruleset only requires the CI checks.",
+    "impact": "A future commit can regress the wireguard firewall rules and still advance the release branch with all checks green.",
+    "recommendation": "Add wireguard-lndconnect to the test.yml scenario matrix (it is a two-node VM test, modest cost), or fold a wg assertion into the default scenario."
+  },
+  {
+    "id": "NB-FORK-2026-09-09-05",
+    "title": "Dead code: fetchNodeModules build support kept after RTL removal",
+    "severity": "info",
+    "category": "hygiene / unused attack surface",
+    "component": "pkgs/build-support/fetch-node-modules.nix",
+    "location": "pkgs/build-support/fetch-node-modules.nix; referenced only by its own wiring at pkgs/default.nix:16",
+    "description": "The node_modules fetcher was needed by the removed RTL packaging. Nothing in modules, packages, or tests consumes it anymore; the flake already removes it from exported packages.",
+    "impact": "Build-time-only surface and repo bloat; no runtime exposure.",
+    "recommendation": "Delete the file and its callPackage entry, per the fork's own delete-over-add policy."
+  }
+]
+```
+
+The two staleness findings (01, 02) are the actionable ones: both were published inside the pin's freshness window and both are invisible to the fork's CVE-based scan by construction. The fork's own overrides.nix mechanism exists for exactly this; it just needs to be driven by upstream release feeds, not only by NVD.
