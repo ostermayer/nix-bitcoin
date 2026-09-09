@@ -1,0 +1,125 @@
+{
+  "reviews": [
+    {
+      "id": "F1",
+      "verdict": "confirmed",
+      "severity": "low",
+      "reasoning": "wireguard.nix:192 sets restAddress = \"0.0.0.0\", while its sole assertion rejects netns isolation. Standalone use permits a disabled firewall; secure-node.nix:21 already sets firewall.enable = true, protecting the recommended configuration.",
+      "fix_ok": false,
+      "fix_note": "The assertion works; mkDefault does not prevent an explicit false and duplicates NixOS's existing default. Netns installs its own namespace firewall rules independently, so that extension needs separate justification."
+    },
+    {
+      "id": "F2",
+      "verdict": "needs-info",
+      "severity": "info",
+      "reasoning": "Lines 60-81 contain the listed PSBT and explicit-key signing methods. Absence of module-level callsites does not establish that packaged consumers do not need them: btcpayserver.nix:119 inherits this whitelist for NBXplorer.",
+      "fix_ok": false,
+      "fix_note": "Establish unused methods from consumer source or RPC traces before deleting them. Explicit-key signing alone does not expose the node's wallet keys."
+    },
+    {
+      "id": "F3",
+      "verdict": "confirmed",
+      "severity": "low",
+      "reasoning": "bitcoind.nix:442 explicitly chmods the cookie to 0640, and rpcwhitelistdefault=0 leaves cookie authentication unrestricted. This is intentional operator access; shipped LND, electrs and NBXplorer use bitcoinrpc-public rather than bitcoin.",
+      "fix_ok": true,
+      "fix_note": ""
+    },
+    {
+      "id": "F4",
+      "verdict": "confirmed",
+      "severity": "low",
+      "reasoning": "There are 14 whole-package entries without cve restrictions at lines 30-70, suppressing future findings too. cve-scan.sh scans the system runtime closure; comments asserting that packages are only build tools do not constrain these suppressions.",
+      "fix_ok": true,
+      "fix_note": ""
+    },
+    {
+      "id": "F5",
+      "verdict": "confirmed",
+      "severity": "low",
+      "reasoning": "makeShell.nix:74 selects the highest version-sorted 20* tag, resolves its commit, and computes the downloaded archive's hash without signature verification. That hash pins received content but does not authenticate the release.",
+      "fix_ok": false,
+      "fix_note": "Signing alone is insufficient: the updater must verify against a trusted identity before using the revision. Existing signed commits could supply that verification."
+    },
+    {
+      "id": "F6",
+      "verdict": "confirmed",
+      "severity": "medium",
+      "reasoning": "id-vm contains an unencrypted private key matching id-vm.pub, which vm-config.nix:12 authorizes for root. run-vm.sh:29 uses hostfwd=tcp::${sshPort}-:22, binding beyond loopback; anyone reaching that host port can authenticate to the demo guest.",
+      "fix_ok": true,
+      "fix_note": ""
+    },
+    {
+      "id": "F7",
+      "verdict": "false-positive",
+      "severity": "info",
+      "reasoning": "nixops.nix:19 adds directory traversal only, not directory listing or file readability. deployment.keys inherits each secret's user, group and permissions; the default 0440 file permissions remain the confidentiality control.",
+      "fix_ok": true,
+      "fix_note": ""
+    },
+    {
+      "id": "F8",
+      "verdict": "confirmed",
+      "severity": "info",
+      "reasoning": "The development profile explicitly enables allow-debuggers at line 19. caps.drop all, nonewprivs, noroot and seccomp remain enabled, so this is a development sandbox relaxation, not a demonstrated privilege escape.",
+      "fix_ok": true,
+      "fix_note": ""
+    },
+    {
+      "id": "NB-FORK-2026-09-09-01",
+      "verdict": "needs-info",
+      "severity": "medium",
+      "reasoning": "The cached nixpkgs source matches flake.lock's narHash and specifies Tor 0.4.9.11; overrides.nix contains no Tor override. The tree does not substantiate the claimed 0.4.9.12 release or TROVE applicability; authoritative upstream release/advisory evidence is missing.",
+      "fix_ok": false,
+      "fix_note": "Adding an override alone leaves Tor unchanged: the NixOS service defaults to pkgs.tor, not nix-bitcoin.pkgs.tor. Wire services.tor.package to the verified replacement, or update the system nixpkgs pin."
+    },
+    {
+      "id": "NB-FORK-2026-09-09-02",
+      "verdict": "needs-info",
+      "severity": "medium",
+      "reasoning": "overrides.nix:29 selects the local 2.4.3 package over pinned nixpkgs's 2.4.2; default.nix:18,28 confirms the version and dependency file. The claimed 2.4.4 security release and affected behavior require upstream advisory or patch evidence absent from the tree.",
+      "fix_ok": true,
+      "fix_note": ""
+    },
+    {
+      "id": "NB-FORK-2026-09-09-03",
+      "verdict": "confirmed",
+      "severity": "low",
+      "reasoning": "This duplicates F1: the pinned iptables firewall configuration is gated by cfg.enable, but WireGuard's wildcard REST bind is not. secure-node explicitly enables the firewall, and macaroon authentication remains; exposure is conditional, not an automatic admin-authentication bypass.",
+      "fix_ok": true,
+      "fix_note": ""
+    },
+    {
+      "id": "NB-FORK-2026-09-09-04",
+      "verdict": "confirmed",
+      "severity": "low",
+      "reasoning": "test.yml:49-52 lists only default, regtest and netns, and test-info.nix derives its tests from that list. However, wireguard-lndconnect currently tests successful tunnel/REST access only, so the claimed coverage of restrictive firewall behavior is overstated.",
+      "fix_ok": false,
+      "fix_note": "Add negative connectivity assertions as well as the matrix entry, and require the resulting check in the release ruleset. A successful-access assertion alone will not detect permissive firewall regressions."
+    },
+    {
+      "id": "NB-FORK-2026-09-09-05",
+      "verdict": "confirmed",
+      "severity": "info",
+      "reasoning": "pkgs/default.nix:16 wires fetchNodeModules, but no in-tree package calls it. flake.nix removes it from packages, although legacyPackages and the overlay still expose it; there is no demonstrated runtime exposure.",
+      "fix_ok": true,
+      "fix_note": ""
+    }
+  ],
+  "missed": [
+    {
+      "file": "helper/makeShell.nix",
+      "line": 88,
+      "severity": "medium",
+      "title": "Updater executes the new shell before commit review",
+      "description": "After rewriting the pin and printing the review reminder, interactive updates immediately exec nix-shell. examples/shell.nix imports makeShell.nix from that new revision, allowing its shellHook to execute on the deployment machine before the advertised manual review."
+    },
+    {
+      "file": "modules/presets/wireguard.nix",
+      "line": 153,
+      "severity": "low",
+      "title": "Firewalld silently omits WireGuard-specific rules",
+      "description": "The preset assumes the iptables backend. Pinned NixOS's firewalld backend neither executes nor rejects extraCommands, so restrictPeer is unenforced and the REST accept rule is absent even with firewall.enable=true. Assert the supported backend or implement equivalent backend rules."
+    }
+  ],
+  "summary": "Reviewed commit c021a3e441a3b7c21c2a75fe28d3f17f01fcdebd without modifying the tree. F1 and NB-FORK-2026-09-09-03 are duplicates; the release-advisory claims and RPC-consumer assumptions remain unverified. Several recommendations need additional wiring, verification or negative tests."
+}

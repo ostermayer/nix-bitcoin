@@ -85,3 +85,5 @@
 - attack: null
 - fix: Add an assertion that networking.firewall.enable is true whenever the wg lndconnect mode is active (or whenever restAddress would be 0.0.0.0). This is independent of, and much cheaper than, the deferred rebind work in docs/wireguard-rest-bind.md.
 
+
+> Second opinion by gpt-6-astra (codex, thinking=xhigh): **ok** — see `second-opinion.gpt-6-astra.md`.
