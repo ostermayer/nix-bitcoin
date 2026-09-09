@@ -1,0 +1,86 @@
+[
+  {
+    "id": "F1",
+    "severity": "low",
+    "status": "known-accepted",
+    "title": "WireGuard preset binds lnd admin REST API to 0.0.0.0, protected by firewall only",
+    "component": "modules/presets/wireguard.nix:186",
+    "description": "When lndconnect is enabled with the wireguard preset, lnd's macaroon-admin REST API listens on all interfaces. Protection relies solely on nixos-fw default-drop plus an accept rule that is now correctly interface-pinned (`-i wg-nb`) and source-pinned to the single peer /32 (fixed in HEAD d22c5da). The rebind to the wg address is deliberately deferred because nbLib.address maps 0.0.0.0 -> 127.0.0.1 and all internal consumers depend on it.",
+    "impact": "If the firewall is misconfigured or bypassed (e.g. user-added accept rules), the lnd admin REST API is network-reachable. TLS + admin macaroon still required, so this is defense-in-depth loss, not direct compromise.",
+    "remediation": "Tracked with a full breakage checklist in docs/wireguard-rest-bind.md. No action needed beyond the documented plan.",
+    "file": "modules/presets/wireguard.nix:186",
+    "line": 0
+  },
+  {
+    "id": "F2",
+    "severity": "low",
+    "status": "verified-behavior",
+    "title": "`+`-prefixed rootScript runs fully unsandboxed (bypasses ProtectSystem=strict), not just User=",
+    "component": "pkgs/lib.nix (rootScript), modules/lnd.nix:257-310",
+    "description": "Verified empirically on systemd: an ExecStartPost prefixed with `+` executes with no mount-namespace confinement at all (mkdir in /run outside RuntimeDirectory succeeds under ProtectSystem=strict). The lnd-create-macaroons script that depends on this is carefully hardened (root-only staging, atomic rename, de-privileged macaroon read, 64KiB cap, jq -e), so nothing is exploitable today. The risk is latent: any future rootScript addition inherits zero sandboxing, and the missing `set -u` in nbLib.script means a refactor that unsets $RUNTIME_DIRECTORY would redirect `mv` targets to the filesystem root as unsandboxed root.",
+    "impact": "None today. Latent footgun: small edits to the macaroon script or RuntimeDirectory config could become root file-overwrite bugs.",
+    "remediation": "Optional hardening: add `set -u` to nbLib.script and a guard like `[ -n \"$RUNTIME_DIRECTORY\" ] || exit 1` in the macaroon script.",
+    "file": "pkgs/lib.nix (rootScript), modules/lnd.nix:257-310",
+    "line": 0
+  },
+  {
+    "id": "F3",
+    "severity": "info",
+    "status": "documented-design",
+    "title": "bitcoind .cookie is group-readable, granting full privileged RPC to group bitcoin (operator)",
+    "component": "modules/bitcoind.nix postStart",
+    "description": "postStart chmods the RPC cookie 0640 root-equivalent-readable by group bitcoin, which includes the operator. This equals full privileged bitcoind RPC (wallet, P2P control) for the operator. Documented in the code comment (audit L-10) with guidance to prefer rpc user + HMAC for new services.",
+    "impact": "Operator (already funds-equivalent via `doas -u lnd` seed access) gets full bitcoind RPC. Consistent with the fork's operator-is-admin trust model.",
+    "remediation": "None required; keep new consumers on rpc users + HMAC as the comment states.",
+    "file": "modules/bitcoind.nix postStart",
+    "line": 0
+  },
+  {
+    "id": "F4",
+    "severity": "info",
+    "status": "documented-design",
+    "title": "Operator is funds-equivalent by design (nopass doas to lnd, netns-exec cap_sys_admin)",
+    "component": "modules/operator.nix:50-56, modules/netns-isolation.nix:84-90",
+    "description": "secure-node grants the operator nopass `doas -u lnd` (can read the 0400 lnd-seed-mnemonic) and ownership of the cap_sys_admin netns-exec wrapper. These are deliberate convenience boundaries; the threat model treats the operator as trusted. Worth restating because it means 'service isolation' on this fork does not extend to the operator account.",
+    "impact": "Compromise of the operator SSH key is full node compromise. Expected by design, but users should protect that key accordingly.",
+    "remediation": "Document explicitly in docs/security posture if not already; no code change.",
+    "file": "modules/operator.nix:50-56, modules/netns-isolation.nix:84-90",
+    "line": 0
+  },
+  {
+    "id": "F5",
+    "severity": "info",
+    "status": "documented-design",
+    "title": "nix-bitcoin-wg-connect host autodetection queries third-party IP-echo services",
+    "component": "modules/presets/wireguard.nix (wgConnect script)",
+    "description": "Running nix-bitcoin-wg-connect without a host argument shells out to lndconnect's external-IP discovery (go-external-ip), which contacts external providers and reveals the node's IP to them. Noted in the code comment.",
+    "impact": "Privacy leak of the node's IP to third-party echo services during QR pairing.",
+    "remediation": "Pass the host explicitly (`nix-bitcoin-wg-connect <host>`) to skip autodetection.",
+    "file": "modules/presets/wireguard.nix (wgConnect script)",
+    "line": 0
+  },
+  {
+    "id": "F6",
+    "severity": "info",
+    "status": "mitigated-by-docs",
+    "title": "Committed SSH private key in examples/qemu-vm",
+    "component": "examples/qemu-vm/id-vm",
+    "description": "A world-known private key authorized for root/operator in the QEMU demo VM configs. Both deploy-qemu-vm.sh and deploy-krops.sh carry a prominent 'MAKE SURE TO REPLACE the SSH identity file' warning, and the key is only referenced by example code.",
+    "impact": "Only if a user copies the example verbatim into a real deployment.",
+    "remediation": "None; warnings are adequate for example material.",
+    "file": "examples/qemu-vm/id-vm",
+    "line": 0
+  },
+  {
+    "id": "F7",
+    "severity": "info",
+    "status": "doc-nit",
+    "title": "cve-scan.sh summary text contradicts scan target",
+    "component": "test/ci/cve-scan.sh (triage hint line)",
+    "description": "The generated triage note says 'whitelist test/build tooling (this scans the full test closure)' while the script header and scan target are the node RUNTIME closure (scan-node.nix). Cosmetic, but it misleads future triagers about what the whitelist covers.",
+    "impact": "None on security posture; possible triage confusion.",
+    "remediation": "Drop 'test closure' wording from the summary hint.",
+    "file": "test/ci/cve-scan.sh (triage hint line)",
+    "line": 0
+  }
+]
