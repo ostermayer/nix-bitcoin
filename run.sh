@@ -18,11 +18,13 @@
 #
 # Usage: run.sh [ref] [model ...]        (default: origin/release, kimi-k3 glm-5p3)
 #   model = [provider/]id[:thinking]. Bare ids are Fireworks models
-#   (accounts/fireworks/models/<id>); `openai/gpt-6-astra:xhigh` runs GPT-6
-#   Astra through the OpenAI API (OPENAI_API_KEY in secrets.env),
-#   `openai-codex/gpt-6-astra:xhigh` through a ChatGPT/Codex login stored in
-#   pi's auth.json. A missing :thinking falls back to FORK_AUDIT_THINK.
-#   Gate config since 2026-09-09: kimi-k3:max glm-5p3:max openai/gpt-6-astra:xhigh
+#   (accounts/fireworks/models/<id>). `codex/gpt-6-astra:xhigh` runs GPT-6
+#   Astra through the locally installed Codex CLI (`codex exec`, ChatGPT login
+#   in ~/.codex/auth.json, its own read-only sandbox inside our bwrap).
+#   `openai/gpt-6-astra:xhigh` is the API-key route via pi instead
+#   (OPENAI_API_KEY in secrets.env). A missing :thinking falls back to
+#   FORK_AUDIT_THINK.
+#   Gate config since 2026-09-09: kimi-k3:max glm-5p3:max codex/gpt-6-astra:xhigh
 # Env:   FORK_AUDIT_THINK=high  FORK_AUDIT_TIMEOUT=3600  FORK_AUDIT_NO_PUBLISH=1
 #
 # shellcheck disable=SC2016  # jq programs use single quotes intentionally
@@ -71,7 +73,8 @@ have() { command -v "$1" >/dev/null; }
 JQ() { jq "$@"; }   # native jq (present on pop-os and CI); nix-shell wrapping ate the args
 
 STAMP="$(date +%F-%H%M%S)"
-OUT="$WORK/reports/$STAMP"; SRC="$WORK/src"
+OUT="$WORK/reports/$STAMP"; SRC="$WORK/src-$STAMP"   # per-run checkout: concurrent runs must not wipe each other
+trap 'rm -rf "$SRC"' EXIT
 mkdir -p "$OUT"
 log() { printf '%s %s\n' "$(date -Is)" "$1"; }
 
@@ -96,12 +99,43 @@ extract_json() { awk '/```json/{buf="";cap=1;next} cap&&/```/{last=buf;cap=0;nex
 NORM='def fo: if type=="array" then . elif (type=="object" and ((.findings?|type)=="array")) then .findings else [.. | objects | select(has("title") and has("severity"))] end; fo | map(. + {file:(.file // .location // .component // "?"), line:(.line // 0)})'
 # Set when any model produced finding-shaped output we could not parse. A parse
 # failure must fail the run loudly, never publish a misleading "0 findings".
-PARSE_FAIL=0
+PARSE_FAIL=0; FAILED_MODELS=()
 
 for i in "${!MODELS[@]}"; do
   m="${MODELS[$i]}"; prov="${PROVS[$i]}"; mid="${MIDS[$i]}"; think="${THINKS[$i]}"
   raw="$OUT/$m.raw.txt"; fj="$OUT/$m.findings.json"
   log "=== $m ($prov, thinking=$think) ==="
+  if [ "$prov" = codex ]; then
+    # Codex CLI backend. Same bwrap allowlist as the pi path, plus ~/.local
+    # (the codex symlink) read-only and ~/.codex read-write: codex refreshes
+    # its ChatGPT OAuth tokens in place, and a discarded refresh would strand
+    # the operator's login. Residual, same class as the Fireworks key: the
+    # model's shell can read its own auth.json — the token values are scrubbed
+    # from every published file below. `-s read-only` is codex's own sandbox;
+    # web search is disabled so a fetched page cannot prompt-inject the model.
+    { cat "$PROMPT"; printf '\n\n%s\n' "$TASK"; } > "$OUT/.$m.prompt.md"
+    ( cd "$SRC" && timeout "${FORK_AUDIT_TIMEOUT:-3600}" \
+        bwrap \
+          --ro-bind / / --dev /dev --proc /proc --bind /tmp /tmp --unshare-pid \
+          --tmpfs "$HOME" \
+          --ro-bind "$HOME/.local" "$HOME/.local" \
+          --bind "$HOME/.codex" "$HOME/.codex" \
+          --ro-bind "$SRC" "$SRC" \
+          --chdir "$SRC" \
+          -- codex exec -m "$mid" -c "model_reasoning_effort=$think" -c 'web_search="disabled"' \
+               -s read-only --ephemeral --skip-git-repo-check --color never \
+               -o "/tmp/fork-audit-$STAMP.$m.last" - < "$OUT/.$m.prompt.md" ) > "$raw" 2>&1
+    rc=$?; [ "$rc" -eq 0 ] || log "$m exited nonzero ($rc; partial output kept)"
+    # -o must land inside a bind (/tmp): $HOME is a tmpfs inside the sandbox.
+    mv -f "/tmp/fork-audit-$STAMP.$m.last" "$OUT/$m.last.txt" 2>/dev/null || :
+    # codex exec streams the transcript on stderr and only the final message on
+    # stdout, so both are merged into $raw (the published transcript).
+    # Findings come from the final message; fall back to the transcript, and
+    # accept a bare JSON document when the model skipped the fence.
+    extract_json "$OUT/$m.last.txt" > "$fj.raw" 2>/dev/null
+    [ -s "$fj.raw" ] || extract_json "$raw" > "$fj.raw"
+    [ -s "$fj.raw" ] || { grep -qE '^[[:space:]]*[[{]' "$OUT/$m.last.txt" 2>/dev/null && cp "$OUT/$m.last.txt" "$fj.raw"; }
+  else
   # Run the model inside a bwrap sandbox. Allowlist, not denylist: the whole of
   # $HOME is masked with a tmpfs, and ONLY what the audit needs is re-exposed —
   # pi's binary (~/.npm-global, read-only), pi's config (~/.pi/agent, via a
@@ -123,9 +157,10 @@ for i in "${!MODELS[@]}"; do
         --overlay-src "$HOME/.pi/agent" --tmp-overlay "$HOME/.pi/agent" \
         --chdir "$SRC" \
         -- pi -p --provider "$prov" --model "$mid:$think" --tools "$TOOLS" \
-             --append-system-prompt "$PROMPT" "$TASK" ) > "$raw" 2> "$OUT/$m.stderr" \
-    || log "$m exited nonzero (partial output kept)"
+             --append-system-prompt "$PROMPT" "$TASK" ) > "$raw" 2> "$OUT/$m.stderr"
+  rc=$?; [ "$rc" -eq 0 ] || log "$m exited nonzero ($rc; partial output kept)"
   extract_json "$raw" > "$fj.raw"
+  fi
   # Normalize any shape a model actually emits into a flat array of finding
   # objects: a bare array, {"findings":[...]}, or (fallback) any nested objects
   # that carry title+severity. Coalesce the location field (models variously use
@@ -146,6 +181,13 @@ for i in "${!MODELS[@]}"; do
     echo '[]' > "$fj"
     if grep -qE '"(severity|title)"[[:space:]]*:' "$raw"; then
       log "$m: PARSE FAIL — findings in raw but no parseable JSON block"; PARSE_FAIL=1
+    elif [ "$rc" -ne 0 ] || grep -qiE '^ERROR:|content was flagged|rate limit|quota|unauthori[sz]ed' "$raw" "$OUT/$m.stderr" 2>/dev/null; then
+      # The model never delivered a verdict (crashed, refused, was blocked by a
+      # provider policy filter). Publishing that as "0 findings" is the
+      # fail-open this audit exists to catch — treat it exactly like a parse
+      # failure: banner, incomplete counts, nonzero exit.
+      log "$m: MODEL FAILED — no verdict delivered (exit $rc)"; PARSE_FAIL=1
+      FAILED_MODELS+=("$m")
     else
       log "$m: no findings (empty)"
     fi
@@ -166,7 +208,7 @@ corrob=$(JQ '[group_by(.file+"|"+(.title//""))[]|select(length>1)]|length' "$MER
   echo "- Models: $(describe_models)"
   echo "- Prompt: the exact brief used is saved next to this report as \`prompt.used.md\`"
   echo "- Findings: **$total** total · $crit critical · $high high · $corrob flagged by >1 model"; echo
-  [ "$PARSE_FAIL" -ne 0 ] && echo "> ⚠ PARSE FAILURE — at least one model's findings could not be parsed. The counts above are INCOMPLETE. Read the per-model transcripts before trusting this report." && echo
+  [ "$PARSE_FAIL" -ne 0 ] && echo "> ⚠ INCOMPLETE — at least one model failed or its findings could not be parsed${FAILED_MODELS[*]:+ (no verdict from: ${FAILED_MODELS[*]})}. The counts above are NOT a clean result. Read the per-model transcripts before trusting this report." && echo
   echo "> LLM findings gate the release: the audit must complete and be reviewed before shipping."; echo
   if have jq && [ "${total:-0}" != 0 ]; then
     jq -r --argjson o '{"critical":0,"high":1,"medium":2,"low":3,"info":4}' 'sort_by($o[.severity]//9)|.[]|
@@ -194,6 +236,11 @@ for f in "${PUBFILES[@]}"; do [ -f "$f" ] || continue
   fi
 done
 secrets=("${FIREWORKS_API_KEY:-}" "${OPENAI_API_KEY:-}" "${BRAVE_API_KEY:-}" "${EXA_API_KEY:-}" "${RESEND_API_KEY:-}")
+# Codex CLI OAuth material (reachable by the codex-backed model's shell).
+if [ -f "$HOME/.codex/auth.json" ] && have jq; then
+  while IFS= read -r tok; do [ -n "$tok" ] && secrets+=("$tok"); done \
+    < <(jq -r '[.OPENAI_API_KEY?, .tokens.access_token?, .tokens.refresh_token?, .tokens.id_token?] | .[] | select(. != null and . != "")' "$HOME/.codex/auth.json" 2>/dev/null)
+fi
 for k in "$DEPLOY_KEY" "$SIGN_KEY"; do [ -f "$k" ] && secrets+=("$(cat "$k")"); done
 redact_lines() {  # $1=secret value (maybe multi-line), $2=file
   while IFS= read -r line; do
@@ -240,6 +287,15 @@ publish() {
   if git -C "$pub" push -q origin audits; then log "published to audits branch: runs/$STAMP"; else log "publish push failed"; fi
 }
 publish
+
+# --- second opinion --------------------------------------------------------
+# GPT-6 Astra (Codex CLI) re-reads the cited code and grades every finding
+# (see second-opinion.sh). Off with FORK_AUDIT_SECOND_OPINION=0. It cannot run
+# the adversarial brief itself (OpenAI's cyber classifier), so this is how the
+# third model contributes.
+if [ "${FORK_AUDIT_SECOND_OPINION:-codex/gpt-6-astra:xhigh}" != 0 ] && [ "$total" -gt 0 ] && [ -x "$HERE/second-opinion.sh" ]; then
+  "$HERE/second-opinion.sh" "$STAMP" "${FORK_AUDIT_SECOND_OPINION:-codex/gpt-6-astra:xhigh}" || log "second opinion did not complete"
+fi
 
 # --- email -----------------------------------------------------------------
 if [ -n "${RESEND_API_KEY:-}" ] && have jq && [ "$LEAK" = 0 ]; then
