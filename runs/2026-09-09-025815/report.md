@@ -91,3 +91,5 @@
 - attack: null
 - fix: Delete the dead branches; keep one explicit assertion that trimmed-service netns names are rejected by netns-exec (which is the actual invariant).
 
+
+> Second opinion by gpt-6-astra (codex, thinking=xhigh): **ok** — see `second-opinion.gpt-6-astra.md`.
