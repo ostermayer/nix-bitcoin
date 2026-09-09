@@ -140,10 +140,16 @@ if [ -f "$HOME/.codex/auth.json" ] && have jq; then
 fi
 for k in "$DEPLOY_KEY" "$SIGN_KEY"; do [ -f "$k" ] && secrets+=("$(cat "$k")"); done
 LEAK=0
+# PEM blocks: a real private key anywhere blocks publishing; the fork's
+# deliberately public demo key (examples/qemu-vm/id-vm, allowlisted in
+# public-keys.allow) is replaced by a placeholder instead.
+python3 "$HERE/pem-check.py" "$HERE/public-keys.allow" "${PUBFILES[@]}" || LEAK=1
 for f in "${PUBFILES[@]}"; do
-  grep -qE -- '-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----' "$f" && { log "PRIVATE-KEY BLOCK in $f"; LEAK=1; }
   for s in "${secrets[@]}"; do
     while IFS= read -r line; do [ -n "$line" ] || continue
+      # PEM armor lines are not secret material; redacting them would only
+      # blind the PEM check above and mangle innocent transcripts.
+      case "$line" in -----BEGIN*|-----END*) continue;; esac
       esc=$(printf '%s' "$line" | sed 's/[#&/\\]/\\&/g'); sed -i "s#${esc}#[REDACTED]#g" "$f"
       grep -Fq -- "$line" "$f" && { log "SECRET VALUE present in $f"; LEAK=1; }
     done < <(printf '%s\n' "$s")

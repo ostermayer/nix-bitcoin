@@ -230,11 +230,10 @@ log "report: $REPORT"
 #       covered) and fail closed if any survives.
 PUBFILES=("$REPORT" "$MERGED"); for m in "${MODELS[@]}"; do PUBFILES+=("$OUT/$m.findings.json" "$OUT/$m.raw.txt"); done
 LEAK=0
-for f in "${PUBFILES[@]}"; do [ -f "$f" ] || continue
-  if grep -qE -- '-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----' "$f"; then
-    log "PRIVATE-KEY BLOCK in $f — refusing to publish"; LEAK=1
-  fi
-done
+# PEM blocks: a real private key anywhere blocks publishing; the fork's
+# deliberately public demo key (examples/qemu-vm/id-vm, allowlisted in
+# public-keys.allow) is replaced by a placeholder instead.
+python3 "$HERE/pem-check.py" "$HERE/public-keys.allow" "${PUBFILES[@]}" || { log "PRIVATE-KEY BLOCK — refusing to publish"; LEAK=1; }
 secrets=("${FIREWORKS_API_KEY:-}" "${OPENAI_API_KEY:-}" "${BRAVE_API_KEY:-}" "${EXA_API_KEY:-}" "${RESEND_API_KEY:-}")
 # Codex CLI OAuth material (reachable by the codex-backed model's shell).
 if [ -f "$HOME/.codex/auth.json" ] && have jq; then
@@ -245,6 +244,9 @@ for k in "$DEPLOY_KEY" "$SIGN_KEY"; do [ -f "$k" ] && secrets+=("$(cat "$k")"); 
 redact_lines() {  # $1=secret value (maybe multi-line), $2=file
   while IFS= read -r line; do
     [ -n "$line" ] || continue
+    # PEM armor lines are not secret material; redacting them would only
+    # blind the PEM check and mangle innocent transcripts.
+    case "$line" in -----BEGIN*|-----END*) continue;; esac
     esc=$(printf '%s' "$line" | sed 's/[#&/\\]/\\&/g'); sed -i "s#${esc}#[REDACTED]#g" "$2"
   done < <(printf '%s\n' "$1")
 }
@@ -255,6 +257,7 @@ for f in "${PUBFILES[@]}"; do [ -f "$f" ] || continue
   for s in "${secrets[@]}"; do [ -n "$s" ] || continue
     while IFS= read -r line; do
       [ -n "$line" ] || continue
+      case "$line" in -----BEGIN*|-----END*) continue;; esac
       if grep -Fq -- "$line" "$f"; then log "SECRET VALUE present in $f — refusing to publish"; LEAK=1; fi
     done < <(printf '%s\n' "$s")
   done
