@@ -45,11 +45,15 @@ jobs:
         # `default` (secureNode) and `regtest` boot the full stack
         # (bitcoind + lnd + electrs + btcpayserver/nbxplorer) and assert it
         # works — this catches RPC-whitelist / service-health regressions.
-        # `netns` covers network-namespace isolation.
+        # `netns` covers network-namespace isolation. `wireguard-lndconnect`
+        # boots the wireguard preset and reaches lnd REST through the tunnel
+        # from a second VM — the preset's firewall rules are its whole security
+        # model, so they are release-gated too (audit 2026-09-09).
         scenario:
           - default
           - regtest
           - netns
+          - wireguard-lndconnect
     needs: build_test_drivers
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4

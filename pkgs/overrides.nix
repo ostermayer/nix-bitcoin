@@ -26,7 +26,7 @@ in
   # full package copy with a regenerated lockfile (see ./btcpayserver/) —
   # buildDotnetModule can't take nugetDeps via overrideAttrs. Drop the copy
   # together with this override once the pin catches up.
-  btcpayserver = if lagging pkgs.btcpayserver "2.4.3"
+  btcpayserver = if lagging pkgs.btcpayserver "2.4.4"
                  then pkgs.callPackage ./btcpayserver { }
                  else pkgs.btcpayserver;
 }

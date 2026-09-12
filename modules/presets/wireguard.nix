@@ -100,6 +100,21 @@ in {
         assertion = !(config.nix-bitcoin.netns-isolation.enable or false);
         message = "`nix-bitcoin.wireguard` is not compatible with `netns-isolation`.";
       }
+      # The whole security model of this preset is the iptables rule set
+      # below: the lnd admin REST listener is bound to 0.0.0.0 (see the comment
+      # at `restAddress`) and the peer restriction is an iptables REJECT. Two
+      # silent ways to lose that (audit 2026-09-09): the firewall disabled, or
+      # the nftables backend enabled — NixOS then ignores `extraCommands`
+      # without an error, so the REST accept rule and the restrictPeer REJECT
+      # simply vanish. Refuse to evaluate rather than ship an unguarded admin API.
+      {
+        assertion = !lndconnect || config.networking.firewall.enable;
+        message = "nix-bitcoin wireguard preset: services.lnd.lndconnect binds the admin REST API to 0.0.0.0 and relies on networking.firewall — enable the firewall.";
+      }
+      {
+        assertion = !config.networking.nftables.enable;
+        message = "nix-bitcoin wireguard preset: its rules are iptables `extraCommands`, which the nftables backend silently drops (networking.nftables.enable = true). Keep the iptables backend or port the rules.";
+      }
     ];
 
     networking.wireguard.interfaces.wg-nb = {

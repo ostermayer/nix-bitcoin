@@ -83,10 +83,13 @@ pkgs.stdenv.mkDerivation {
         echo "nix-bitcoin-release.nix already pins $tag ($commit)"
       else
         printf '%s' "$new" > "$releaseFile"
-        echo "Pinned $tag ($commit) in nix-bitcoin-release.nix — review that commit before deploying"
-        if [[ $isInteractive ]]; then
-          exec nix-shell
-        fi
+        echo "Pinned $tag ($commit) in nix-bitcoin-release.nix."
+        echo "Review that commit first — the next nix-shell evaluates the new tree's shellHook:"
+        echo "  https://github.com/ostermayer/nix-bitcoin/compare/$(echo "$current" | sed -n 's|.*/archive/\([0-9a-f]*\)\.tar\.gz.*|\1|p')...$commit"
+        echo "then re-enter the deployment shell with: exit; nix-shell"
+        # Deliberately no automatic `exec nix-shell`: that would run the newly
+        # pinned revision's shell code on this machine before the review the
+        # line above asks for (second opinion 2026-09-09).
       fi
     )}
 

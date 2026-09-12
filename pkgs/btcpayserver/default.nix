@@ -1,10 +1,10 @@
 # Copy of nixpkgs' pkgs/by-name/bt/btcpayserver/package.nix, bumped to the
-# 2.4.3 security release (2026-08-24) with a regenerated nuget lockfile.
+# 2.4.4 security release (2026-09-07; 2.4.3 was 2026-08-24) with a regenerated nuget lockfile.
 # Wired up via a version-guarded entry in ../overrides.nix — buildDotnetModule
 # resolves `nugetDeps` from its ORIGINAL call args (and strips it from the
 # derivation attrs), so a plain overrideAttrs of version/src/nugetDeps cannot
 # work; re-calling the package function is the supported path.
-# Delete this directory together with the override once nixpkgs >= 2.4.3.
+# Delete this directory together with the override once nixpkgs >= 2.4.4.
 {
   lib,
   buildDotnetModule,
@@ -15,17 +15,17 @@
 
 buildDotnetModule rec {
   pname = "btcpayserver";
-  version = "2.4.3";
+  version = "2.4.4";
 
   src = fetchFromGitHub {
     owner = "btcpayserver";
     repo = "btcpayserver";
     tag = "v${version}";
-    hash = "sha256-4rDCvC0YmU9ftCcv2QbVDW4e4a/jdMDDJLDB32vQid4=";
+    hash = "sha256-+Oc7GVbN2q9yM9sILLr4a5dOmiCsFTD4BQ+CqfMFlP0=";
   };
 
   projectFile = "BTCPayServer/BTCPayServer.csproj";
-  nugetDeps = ./deps-2.4.3.json;
+  nugetDeps = ./deps-2.4.4.json;
 
   dotnet-sdk = dotnetCorePackages.sdk_10_0;
   dotnet-runtime = dotnetCorePackages.aspnetcore_10_0;
