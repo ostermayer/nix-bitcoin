@@ -1,0 +1,69 @@
+## Audit report: nix-bitcoin fork @ ebf269e
+
+**Surface mapped:** 24 NixOS modules (bitcoind, lnd, lndconnect, electrs, btcpayserver/nbxplorer, netns-isolation, secrets, operator, onion-addresses/services, nodeinfo, backups, security, 6 presets, krops/nixops deployment), the C setcap helper `netns-exec`, packaging (`btcpayserver` 2.4.4 override, `nbxplorer`, `lndinit`, `krops`, patched `nixops`), helpers (`makeShell.nix`/`update-nix-bitcoin`, `fetch-release`, `update-flake.sh`), and CI (`cve-scan.sh`, `release-tag.yml`).
+
+**Verified clean (investigated and dismissed):** `netns-exec` deployment (owner-only 0500, `cap_sys_admin=ep` file cap, absolute-path `execv`, caps dropped pre-exec, whitelist matches shipped services); `setup-secrets` (scoped root sandbox, dotglob lockdown, all interpolations `escapeShellArg`d); `onion-addresses` (symlink refusal, single-read onion-regex validation, build-as-root-then-chown ordering); lnd macaroon pipeline (admin macaroon read via `runuser` as lnd, 64 KiB response cap, root-only staging on same tmpfs, `mv -fT`); rpcauth password via file not argv; wireguard preset (`-i wg-nb` + peer `/32` accept, REJECT inserted at top of `nixos-fw`/`FORWARD`, assertions refusing disabled firewall and the nftables backend); no secrets in `/nix/store`; all fetches hash-pinned; version-guarded btcpayserver override; CVE scan fails closed on malformed reports; commits SSH-signed (verified `gpgsig` header present on HEAD).
+
+No high or medium findings. The tree has visibly absorbed three prior audit rounds; what remains is two lows and three informational items, most already documented by the maintainers.
+
+```json
+[
+  {
+    "id": "F1",
+    "title": "lnd custom macaroons inherit the target user's login group, leaking to shared 'users' group",
+    "severity": "low",
+    "file": "modules/lnd.nix",
+    "line": 300,
+    "status": "open",
+    "description": "The root ExecStartPost creates /run/lnd/<name>.macaroon as root:root 0440, then runs `chown <user>:` (empty group). Per chown(1), a trailing colon with no group sets the group to the user's LOGIN group. For a macaroon granted to a normal login user (NixOS default primary group 'users', gid 100), the macaroon becomes readable by every normal user on the system, widening the grant beyond the named user. Shipped config is unaffected (the only defined macaroon targets system user 'btcpayserver', whose login group is its own), so this is config-dependent: it bites only when an operator defines services.lnd.macaroons.<n>.user as a regular login account. /run/lnd is mode 711, so group members can traverse to the file.",
+    "impact": "A macaroon intended for one login user is readable by all users in group 'users'; depending on the macaroon's permissions (e.g. invoices:write, onchain:read) this is an unintended privilege/隐私 grant.",
+    "recommendation": "Resolve the group explicitly instead of relying on login-group semantics: e.g. a dedicated per-macaroon group, or `chown <user>:nogroup` plus an ACL, or document that macaroon `user` must be a system user with a same-named group."
+  },
+  {
+    "id": "F2",
+    "title": "update-nix-bitcoin auto-selects the newest unsigned release tag; integrity rests on advisory operator review",
+    "severity": "low",
+    "file": "helper/makeShell.nix",
+    "line": 74,
+    "status": "documented-tradeoff",
+    "description": "update-nix-bitcoin picks the highest CalVer tag via `git ls-remote --tags ... | sort -V | tail -n1`, resolves it to a commit with two further ls-remote calls (re-targetable between calls), prefetches that commit's tarball, and writes the pin. There is no signature check on the tag or commit, although commits are SSH-signed (SECURITY.md documents tags as unsigned CI pointers). The written pin is self-consistent (commit + prefetched narHash) and the helper correctly refuses to auto-exec the new shell, printing a compare URL. But nothing forces the review: an operator who skips it and re-enters nix-shell evaluates the newly pinned tree's shellHook. This is weaker than the refused upstream helper (helper/fetch-release), which GPG-verifies the nar-hash against a pinned key. Repo/tag compromise (or a maliciously pushed '20*' tag by anyone with tag-push rights) flows into the pin with only a human gate.",
+    "impact": "Supply-chain: a re-pointed or attacker-created tag yields an operator-approved-looking pin of unreviewed code. Mitigated by commit pinning, the printed compare URL, and no automatic shell re-entry.",
+    "recommendation": "Verify the resolved commit's SSH signature against the maintainer's allowed-signers entry before writing the pin (the infrastructure exists: commits are signed), or at minimum fail unless the tag is an annotated tag object created by the CI workflow identity."
+  },
+  {
+    "id": "F3",
+    "title": "netns-exec leaks the netns fd into the executed program (missing O_CLOEXEC)",
+    "severity": "informational",
+    "file": "pkgs/netns-exec/src/main.c",
+    "line": 73,
+    "status": "open",
+    "description": "`open(netns_path, O_RDONLY)` lacks O_CLOEXEC, so the fd survives execv into the operator-chosen program running inside the namespace. The exec'd process runs as the unprivileged operator with all capabilities dropped, and setns() on the leaked fd requires CAP_SYS_ADMIN, so no privilege gain was found; if the exec target is itself setuid/file-capable, that target already has the powers the fd would grant. Pure hygiene.",
+    "impact": "None demonstrated; leaked fd is unusable without CAP_SYS_ADMIN.",
+    "recommendation": "open(netns_path, O_RDONLY | O_CLOEXEC)."
+  },
+  {
+    "id": "F4",
+    "title": "wireguard preset binds lnd admin REST to 0.0.0.0; protection is firewall-only",
+    "severity": "informational",
+    "file": "modules/presets/wireguard.nix",
+    "line": 207,
+    "status": "documented-deferred",
+    "description": "With lndconnect enabled the preset sets services.lnd.restAddress = 0.0.0.0 and relies on nixos-fw (default-drop + `-i wg-nb -s <peer>/32 --dport 8080` accept + restrictPeer REJECT inserted at top of nixos-fw/FORWARD) as the sole barrier. Since the last commit, evaluation refuses a disabled firewall and the nftables backend, closing the two silent-failure paths, and the accept rule is interface- and single-peer-scoped. Residual: any future local netfilter misconfiguration (or a local process binding/forwarding) exposes the macaroon-admin API; there is no defense in depth at the bind layer. The rebind to the WG server address is deliberately deferred with a breakage checklist in docs/wireguard-rest-bind.md, and lnd's restlisten=0.0.0.0 is IPv4-only so there is no parallel IPv6 gap.",
+    "impact": "Single-point-of-failure on iptables for an admin-grade API; currently guarded and CI-gated (wireguard-lndconnect scenario).",
+    "recommendation": "Work through docs/wireguard-rest-bind.md and bind to the WG server address; until then, consider also asserting services.lnd.restAddress == 0.0.0.0 only when the accept rule is in place."
+  },
+  {
+    "id": "F5",
+    "title": "bitcoind RPC cookie is group-readable (0640, group bitcoin) = full privileged RPC for group members",
+    "severity": "informational",
+    "file": "modules/bitcoind.nix",
+    "line": 442,
+    "status": "documented-design",
+    "description": "postStart chmods the RPC cookie 0640 root... owned bitcoin:bitcoin. Every member of group bitcoin (the operator, plus any service an operator adds to the group) holds full privileged RPC including wallet operations when the wallet is enabled (disablewallet defaults to unset). This is the upstream convenience design, annotated in-tree as audit L-10 with guidance to use rpc users + HMAC for new services. Reported for completeness because 'privilege boundaries we claim to provide' are in scope per SECURITY.md.",
+    "impact": "Any process running as a group-bitcoin user can spend from the bitcoind wallet via RPC.",
+    "recommendation": "Long-term, move local consumers to dedicated rpc users with HMAC and make the cookie root-only; at minimum keep group-bitcoin membership under review."
+  }
+]
+```
+
+**Bottom line:** ship-shape tree. The only actionable code change worth making is F1 (one-line chown semantics fix) and F3 (one-flag hygiene); F2 is a deliberate, documented downgrade from GPG-verified updates that deserves a signature check now that signed commits exist. F4/F5 are known, documented, and correctly guarded.

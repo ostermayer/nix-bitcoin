@@ -1,0 +1,58 @@
+[
+  {
+    "id": "F-1",
+    "title": "wireguard preset: restrictPeer silently inert when firewall is disabled and lndconnect is off",
+    "severity": "low",
+    "component": "modules/presets/wireguard.nix",
+    "location": "assertions block (lines ~104-118) vs networking.firewall.extraCommands",
+    "description": "The preset asserts against nftables unconditionally but only asserts firewall.enable on the lndconnect (0.0.0.0 REST) path. With services.lnd.lndconnect.enable = false, nix-bitcoin.wireguard.restrictPeer = true (default) and networking.firewall.enable = false, evaluation succeeds while the restrictPeer iptables rules are never installed (extraCommands only run when the firewall is enabled), so the documented restriction contract silently does not hold.",
+    "impact": "The WireGuard peer can reach any port on any node address. Practical impact is low because a disabled firewall already exposes the whole node by explicit user choice, but the preset's stated guarantee is false in this configuration and the assertion gating is internally inconsistent.",
+    "preconditions": "Import wireguard preset; lndconnect disabled (or lnd disabled); networking.firewall.enable = false.",
+    "recommendation": "Add assertion: !cfg.restrictPeer || config.networking.firewall.enable (or set restrictPeer default to false when the firewall is off), keeping it symmetric with the existing nftables assertion.",
+    "status": "open",
+    "file": "assertions block (lines ~104-118) vs networking.firewall.extraCommands",
+    "line": 0
+  },
+  {
+    "id": "F-2",
+    "title": "lnd admin REST API bound to 0.0.0.0 by the wireguard preset (known, deferred)",
+    "severity": "low",
+    "component": "modules/presets/wireguard.nix",
+    "location": "services.lnd.restAddress = \"0.0.0.0\" (mkIf lndconnect)",
+    "description": "Enabling lndconnect with the wireguard preset moves the macaroon-authenticated admin REST API from localhost to all interfaces. Protection relies entirely on the nixos-fw firewall. Already tracked by the fork in docs/wireguard-rest-bind.md with a breakage analysis and a recommended fix (second restlisten on the wg address via extraConfig, leaving restAddress untouched).",
+    "impact": "A single firewall failure (rule regression, misconfiguration) exposes the lnd admin API. Mitigations verified present: firewall-enabled and anti-nftables evaluation assertions, accept rule scoped to -i wg-nb and the single peer /32, restrictPeer REJECT inserted ahead of all accepts, and the wireguard-lndconnect VM test is in the release-gating CI matrix.",
+    "preconditions": "wireguard preset + services.lnd.lndconnect.enable = true.",
+    "recommendation": "Implement the documented second-listener design from docs/wireguard-rest-bind.md (extraConfig restlisten=${serverAddress}:${restPort} plus lnd-after-wireguard-wg-nb ordering), then re-run the adversarial audit per the fork's policy.",
+    "status": "known-deferred",
+    "file": "services.lnd.restAddress = \"0.0.0.0\" (mkIf lndconnect)",
+    "line": 0
+  },
+  {
+    "id": "F-3",
+    "title": "update-nix-bitcoin prints a malformed compare URL on first run",
+    "severity": "info",
+    "component": "helper/makeShell.nix",
+    "location": "update-nix-bitcoin(): compare-URL echo",
+    "description": "When nix-bitcoin-release.nix does not exist yet, $current is empty, so the extracted base commit is empty and the printed https://github.com/ostermayer/nix-bitcoin/compare/...<commit> URL is malformed. The operator is still directed to review the pinned commit before re-entering the shell.",
+    "impact": "Cosmetic; no security impact. The no-auto-exec supply-chain fix itself is correct.",
+    "preconditions": "First run of update-nix-bitcoin in a config dir without nix-bitcoin-release.nix.",
+    "recommendation": "Print the commit URL (github.com/ostermayer/nix-bitcoin/commit/$commit) when no previous pin exists.",
+    "status": "open",
+    "file": "update-nix-bitcoin(): compare-URL echo",
+    "line": 0
+  },
+  {
+    "id": "F-4",
+    "title": "deriveaddresses in the public RPC whitelist is the largest remaining per-call CPU cost",
+    "severity": "info",
+    "component": "modules/bitcoind-rpc-public-whitelist.nix",
+    "location": "\"deriveaddresses\" entry",
+    "description": "The public (unprivileged-credential) whitelist deliberately excludes minutes-scale CPU calls (scantxoutset, getblocktemplate, gettxoutsetinfo) but keeps deriveaddresses. Bitcoin Core v31.1 caps descriptor ranges at 1,000,000 entries server-side (ParseDescriptorRange), bounding each call to roughly seconds-to-tens-of-seconds of CPU and a large JSON response.",
+    "impact": "Bounded per call; only abusable by a holder of the public RPC credentials with network reachability to bitcoind's RPC port, which by default is localhost/netns-only. The whitelist header already instructs users who proxy this user publicly to narrow the list.",
+    "preconditions": "User exposes the public RPC user beyond localhost (non-default).",
+    "recommendation": "Optionally drop deriveaddresses (no local consumer in the fork's service set: lnd, electrs, nbxplorer, btcpayserver do not call it), or document it alongside the getpeerinfo/getnodeaddresses caveat.",
+    "status": "open",
+    "file": "\"deriveaddresses\" entry",
+    "line": 0
+  }
+]
