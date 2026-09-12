@@ -1,0 +1,86 @@
+{
+  "reviews": [
+    {
+      "id": "F1",
+      "verdict": "confirmed",
+      "severity": "low",
+      "reasoning": "modules/lnd.nix:264 creates files with mode 0440, and line 300 uses `chown <user>:` to select the user's primary group. RuntimeDirectoryMode=711 permits traversal, so other members of that group can read a known macaroon filename.",
+      "fix_ok": false,
+      "fix_note": "An exclusive dedicated group works, but nogroup or same-named-group documentation does not guarantee exclusivity. For owner-only access, use 0400 and explicit user:root ownership in the staging directory."
+    },
+    {
+      "id": "F2",
+      "verdict": "confirmed",
+      "severity": "low",
+      "reasoning": "helper/makeShell.nix:74-85 selects a remote tag, resolves its target, hashes the downloaded archive and writes the pin without signature verification. Lines 87-92 explicitly require manual review and avoid automatic shell re-entry; the hash establishes consistency, not maintainer authorization.",
+      "fix_ok": false,
+      "fix_note": "Commit verification against an independently trusted allowed-signers key is appropriate. The unsigned annotated-tag alternative is insufficient: tagger names and emails are forgeable and do not authenticate CI."
+    },
+    {
+      "id": "F3",
+      "verdict": "false-positive",
+      "severity": "info",
+      "reasoning": "pkgs/netns-exec/src/main.c:84 explicitly calls `close(fd)` after successful setns and before execv at line 98. The failure path also closes it at line 81.",
+      "fix_ok": false,
+      "fix_note": "O_CLOEXEC is harmless defensive hardening, but there is no surviving descriptor leak to fix."
+    },
+    {
+      "id": "F4",
+      "verdict": "confirmed",
+      "severity": "info",
+      "reasoning": "modules/presets/wireguard.nix:207 sets the wildcard REST address; lines 111, 115 and 175 enforce the firewall/backend prerequisites and scope the added accept rule. This is a bind-hardening issue with macaroon authentication still present; the Nix address string alone does not establish the claimed IPv4-only behavior.",
+      "fix_ok": true,
+      "fix_note": "Follow the full documented design, preserving loopback access and adding WireGuard startup ordering. An accept-rule assertion alone does not narrow the listener."
+    },
+    {
+      "id": "F5",
+      "verdict": "confirmed",
+      "severity": "info",
+      "reasoning": "modules/bitcoind.nix:442 explicitly grants group read access to the cookie, and the 0770 data directory permits traversal. With `rpcwhitelistdefault=0` at line 332 and no cookie-user whitelist, it provides unrestricted RPC; spending additionally requires an available, sufficiently unlocked wallet.",
+      "fix_ok": false,
+      "fix_note": "Use daemon-owned 0600 rather than root-only ownership. A least-privilege migration also needs explicit RPC whitelists and removal of group write access to the data directory; HMAC authentication alone does not restrict RPC privileges."
+    },
+    {
+      "id": "F-1",
+      "verdict": "confirmed",
+      "severity": "low",
+      "reasoning": "modules/presets/wireguard.nix:111 requires firewall.enable only when lndconnect is active, while restrictPeer defaults to true at line 24. Its rules exist solely in firewall.extraCommands at lines 177-185, which the NixOS firewall module does not install when disabled.",
+      "fix_ok": false,
+      "fix_note": "The proposed assertion is correct and sufficient. The alternative of merely changing the default is incomplete: explicitly setting restrictPeer=true would still silently fail."
+    },
+    {
+      "id": "F-2",
+      "verdict": "confirmed",
+      "severity": "info",
+      "reasoning": "This duplicates F4: modules/presets/wireguard.nix:207 creates the wildcard listener despite the documented narrower-listener design. The cited VM scenario tests successful tunnel access, but contains no negative assertions demonstrating rejection of external access or forbidden peer destinations.",
+      "fix_ok": true,
+      "fix_note": "Remove the existing wildcard override so the primary listener returns to loopback, then add the WG listener and ordering. Merely appending another restlisten while retaining 0.0.0.0 does not implement the documented fix."
+    },
+    {
+      "id": "F-3",
+      "verdict": "confirmed",
+      "severity": "info",
+      "reasoning": "helper/makeShell.nix:81 permits an empty current pin, while line 88 unconditionally constructs `/compare/<extracted-base>...<commit>`. The base is also empty for the shipped examples/nix-bitcoin-release.nix, whose contents are `../.`.",
+      "fix_ok": true,
+      "fix_note": "Select the commit-URL fallback whenever no base commit can be extracted, including an existing local-path pin."
+    },
+    {
+      "id": "F-4",
+      "verdict": "needs-info",
+      "severity": "info",
+      "reasoning": "modules/bitcoind-rpc-public-whitelist.nix:78 includes deriveaddresses, but the tree contains neither ParseDescriptorRange nor evidence supporting the timing estimate or comparative CPU ranking. The pinned Core implementation and representative measurements are needed to validate those claims.",
+      "fix_ok": false,
+      "fix_note": "Removing the entry would remove that RPC permission, but the claimed absence of client dependencies is unverified. Obtain the pinned client sources before calling removal compatible, and avoid documenting unvalidated timing estimates."
+    }
+  ],
+  "missed": [
+    {
+      "file": "modules/lnd.nix",
+      "line": 296,
+      "severity": "medium",
+      "title": "Custom macaroon configuration changes do not revoke previous grants",
+      "description": "The baking request supplies only permissions, with no separate root_key_id or expiry, and the script replaces files without revoking earlier tokens. Removing a definition or reducing its permissions leaves copied older macaroons valid; the cached LND CLI confirms default root key ID 0 cannot be deleted through deletemacaroonid. Independent revocation requires separate root-key IDs and lifecycle handling."
+    }
+  ],
+  "summary": "Seven findings are confirmed, including the duplicated REST advisory; F3 is a false positive and F-4 needs more evidence. Most confirmed findings are low or informational, and several recommended fixes need correction. Custom macaroon revocation is an additional issue; no files were modified."
+}

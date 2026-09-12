@@ -61,3 +61,5 @@
 - attack: null
 - fix: Long-term, move local consumers to dedicated rpc users with HMAC and make the cookie root-only; at minimum keep group-bitcoin membership under review.
 
+
+> Second opinion by gpt-6-astra (codex, thinking=xhigh): **ok** — see `second-opinion.gpt-6-astra.md`.
