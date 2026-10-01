@@ -85,3 +85,5 @@
 - attack: null
 - fix: Optional: move secrets from workflow-level env to the single job/step that pushes, and gate the push step on github.event_name != 'pull_request'.
 
+
+> Second opinion by gpt-6-astra (codex, thinking=xhigh): **ok** — see `second-opinion.gpt-6-astra.md`.

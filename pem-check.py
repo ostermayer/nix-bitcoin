@@ -20,6 +20,12 @@ for path in sys.argv[2:]:
         global rc
         if norm(m.group(0)) in allow:
             return "[PRIVATE KEY BLOCK omitted — matches an allowlisted PUBLIC demo key]"
+        # A BEGIN/END pair with no base64 body between them carries no key
+        # material (e.g. a grep/awk that printed only a file's first and last
+        # line, 2026-10-01). Scrub the markers, do not fail the publish.
+        body = m.group(0).splitlines()[1:-1]
+        if not any(re.fullmatch(r"[A-Za-z0-9+/=]{16,}", ln.strip()) for ln in body):
+            return "[PEM markers without key material omitted]"
         rc = 1; print(f"PRIVATE-KEY BLOCK in {path} (not allowlisted)"); return m.group(0)
     t = PEM.sub(sub, s)
     if t != s: open(path, "w").write(t)

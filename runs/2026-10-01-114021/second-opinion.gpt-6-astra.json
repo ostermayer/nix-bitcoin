@@ -1,0 +1,125 @@
+{
+  "reviews": [
+    {
+      "id": "A2026-10-01-1",
+      "verdict": "confirmed",
+      "severity": "medium",
+      "reasoning": "run-vm.sh:29 uses 'hostfwd=tcp::${sshPort}-:22', which listens on all host IPv4 interfaces. vm-config.nix:12 authorizes the matching committed, unencrypted private key for root; deploy-krops.sh enables SSH and selects port 60734. Anyone who can reach that port can authenticate with the private key.",
+      "fix_ok": true,
+      "fix_note": ""
+    },
+    {
+      "id": "A2026-10-01-2",
+      "verdict": "needs-info",
+      "severity": "info",
+      "reasoning": "pkgs/pinned.nix:12 selects unstable LND; matching flake.lock:67 against the cached nixpkgs source confirms version 0.21.3-beta. The tree does not establish the claimed 0.21.4 fixes, current upstream releases, or that the next weekly update will include them.",
+      "fix_ok": false,
+      "fix_note": "Obtain the upstream release notes and verify the resulting package version after updating; a pin update alone does not guarantee inclusion of a particular upstream release."
+    },
+    {
+      "id": "A2026-10-01-3",
+      "verdict": "confirmed",
+      "severity": "low",
+      "reasoning": "wireguard.nix:207 sets 'restAddress = \"0.0.0.0\"'; line 175 limits its added REST accept rule to wg-nb and the configured peer. This is a network-exposure concern: LND still requires macaroon authorization for privileged RPC, and the assertions do not cover every unsupported firewall configuration.",
+      "fix_ok": false,
+      "fix_note": "The documented listener change is sound, but the interim assertions are incomplete: require the iptables backend and require an enabled firewall whenever lndconnect or restrictPeer needs it."
+    },
+    {
+      "id": "A2026-10-01-4",
+      "verdict": "confirmed",
+      "severity": "info",
+      "reasoning": "bitcoind.nix:442 explicitly applies 'chmod 0640' to the cookie, while line 332 sets 'rpcwhitelistdefault=0', leaving cookie authentication unrestricted. Line 469 deliberately grants the operator the service group; this is an explicit administrative trust boundary.",
+      "fix_ok": true,
+      "fix_note": ""
+    },
+    {
+      "id": "A2026-10-01-5",
+      "verdict": "confirmed",
+      "severity": "medium",
+      "reasoning": "copy-src.sh:7 imports the predictable cache, line 17 runs 'rsync -a --delete', and line 21 executes its run-tests.sh. Root can move an attacker-owned cache despite /tmp's sticky bit, and rsync's size/mtime comparison can preserve a planted script without any race; ordinary users cannot normally move another user's cache through sticky /tmp.",
+      "fix_ok": false,
+      "fix_note": "A user-specific pathname alone remains pre-creatable. Use fresh snapshots or a private, ownership-validated cache; any ownership check must reject symlinks and avoid a check/use race."
+    },
+    {
+      "id": "A2026-10-01-6",
+      "verdict": "confirmed",
+      "severity": "info",
+      "reasoning": "build_test_drivers.sh:23 executes 'eval \"$testInfo\"', and test.yml:13-15 supplies Cachix credentials to every job. The workflow uses pull_request rather than pull_request_target, so ordinary fork PRs receive no secrets; repository code already executes directly in these jobs.",
+      "fix_ok": false,
+      "fix_note": "Scoping and PR gating reduce exposure, but this script also publishes through watch-exec during builds. Protecting against earlier CI code execution requires an isolated credentialed publishing job; a later step on the same compromised runner is insufficient."
+    },
+    {
+      "id": "F-01",
+      "verdict": "confirmed",
+      "severity": "low",
+      "reasoning": "wireguard.nix:207 creates the wildcard listener, with network access controlled by the firewall rule at line 175. Macaroon authentication remains an additional application control, so wildcard binding does not itself grant administrative access.",
+      "fix_ok": true,
+      "fix_note": ""
+    },
+    {
+      "id": "F-02",
+      "verdict": "confirmed",
+      "severity": "info",
+      "reasoning": "bitcoind.nix:442 makes the cookie group-readable, and 'rpcwhitelistdefault=0' at line 332 permits unrestricted cookie-authenticated RPC. Membership in the configured service group, normally bitcoin, intentionally grants this authority.",
+      "fix_ok": true,
+      "fix_note": ""
+    },
+    {
+      "id": "F-03",
+      "verdict": "confirmed",
+      "severity": "low",
+      "reasoning": "enable-tor.nix:23-25 omits BTCPay enforcement, and btcpayserver.nix:258 consequently permits external traffic by default. The pinned BTCPay 2.4.4 source uses ordinary HttpClient instances for rates despite the configured socksendpoint; its caching and background refresh mean requests do not correspond one-for-one to invoices.",
+      "fix_ok": true,
+      "fix_note": ""
+    },
+    {
+      "id": "F-04",
+      "verdict": "confirmed",
+      "severity": "low",
+      "reasoning": "netns-isolation.nix:21 contains 'TODO: Assert uniqueness'; the option checks only the numeric range. Lines 61 and 156-157 reuse IDs for addresses and interface names, so duplicate enabled IDs cause collisions and failed namespace setup.",
+      "fix_ok": true,
+      "fix_note": ""
+    },
+    {
+      "id": "F-05",
+      "verdict": "confirmed",
+      "severity": "info",
+      "reasoning": "wireguard.nix:65-73 invokes lndconnect without --host to discover the external IP, with no Tor wrapper or enforced service sandbox. Supplying a host skips this branch, and '/dev/null' is used for the discovery invocation's macaroon.",
+      "fix_ok": true,
+      "fix_note": ""
+    },
+    {
+      "id": "F-06",
+      "verdict": "confirmed",
+      "severity": "info",
+      "reasoning": "bitcoind-rpc-public-whitelist.nix:57-58 includes both methods. This is an authenticated local-service account: bitcoind.nix defaults RPC binding and allowed clients to 127.0.0.1, so its name does not imply anonymous public access.",
+      "fix_ok": true,
+      "fix_note": ""
+    },
+    {
+      "id": "F-07",
+      "verdict": "confirmed",
+      "severity": "low",
+      "reasoning": "examples/flakes/flake.nix:55 sets 'password = \"a\"', and lines 43-46 designate that same main account as the node operator. The FIXME documents the danger but does not prevent deployment with this known password; the template itself does not enable SSH.",
+      "fix_ok": false,
+      "fix_note": "A FIXME is not an enforcement mechanism. Omit the usable default password or require deployment-provided credentials; initialPassword alone neither removes the known credential nor forces a change."
+    }
+  ],
+  "missed": [
+    {
+      "file": "examples/qemu-vm/run-vm.sh",
+      "line": 6,
+      "severity": "medium",
+      "title": "Predictable VM work directory permits host-side code substitution",
+      "description": "The script accepts an existing /tmp/nix-bitcoin-qemu-vm with mkdir -p and later executes through its vm link; deploy-krops.sh also executes its krops-deploy link. A local attacker who pre-creates and owns this directory can replace those entries and execute code as the host user. Allocate a private directory with mktemp -d."
+    },
+    {
+      "file": "modules/presets/wireguard.nix",
+      "line": 111,
+      "severity": "low",
+      "title": "Firewall assertions leave peer restrictions silently disabled",
+      "description": "With lndconnect disabled, firewall.enable=false passes despite restrictPeer=true, so its REJECT rules never run. The pinned NixOS also supports a firewalld backend that ignores extraCommands while networking.nftables.enable remains false, passing both guards even with lndconnect enabled. Assert firewall availability for both features and explicitly require backend=iptables."
+    }
+  ],
+  "summary": "Most reported constructs are present, but several describe intentional administrative access or limited hardening concerns. The demo SSH exposure and root source-cache execution deserve more attention than their original ratings suggest; the upstream release claims remain only partially verified. Two additional defects were identified, and no files were modified."
+}
