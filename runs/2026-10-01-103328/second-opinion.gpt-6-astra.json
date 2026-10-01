@@ -1,0 +1,132 @@
+{
+  "reviews": [
+    {
+      "id": "F1",
+      "verdict": "confirmed",
+      "severity": "low",
+      "reasoning": "modules/presets/wireguard.nix:206-208 sets restAddress = \"0.0.0.0\"; line 175 restricts the firewall allowance to wg-nb and the peer /32. This is a network exposure hardening gap: TLS and macaroon authentication still apply if the firewall fails.",
+      "fix_ok": true,
+      "fix_note": ""
+    },
+    {
+      "id": "F2",
+      "verdict": "confirmed",
+      "severity": "low",
+      "reasoning": "modules/presets/wireguard.nix:185 inserts into FORWARD, but lines 188-192 condition deletion on restrictPeer. The pinned NixOS firewall uses reloadIfChanged and the new configuration's extraStopCommands, so true-to-false leaves the rule; however, switching back normally deletes that stale copy before reinserting, rather than creating a duplicate.",
+      "fix_ok": true,
+      "fix_note": ""
+    },
+    {
+      "id": "F3",
+      "verdict": "confirmed",
+      "severity": "low",
+      "reasoning": ".github/workflows/release-tag.yml:65 uses unsigned `git tag -a`, and helper/makeShell.nix:74-85 resolves and pins remote content without signature verification. Lines 87-92 request review and avoid automatic shell execution; the downloaded hash guarantees subsequent consistency, not publisher authenticity.",
+      "fix_ok": true,
+      "fix_note": ""
+    },
+    {
+      "id": "F4",
+      "verdict": "needs-info",
+      "severity": "info",
+      "reasoning": "pkgs/btcpayserver/default.nix:18-28 pins version 2.4.4 and its source/dependencies; all 193 lock entries have hashes, and pkgs/overrides.nix:29-31 correctly guards the override. No incorrect hash or compromised dependency is demonstrated; assessing provenance requires an independently trusted upstream release and dependency comparison.",
+      "fix_ok": true,
+      "fix_note": ""
+    },
+    {
+      "id": "F5",
+      "verdict": "confirmed",
+      "severity": "info",
+      "reasoning": "modules/btcpayserver.nix:199 and :247 explicitly set MemoryDenyWriteExecute = false while retaining nbLib.defaultHardening. This confirms the systemd exception, but does not establish that the runtime itself lacks W^X or that every current .NET JIT configuration requires this exception.",
+      "fix_ok": true,
+      "fix_note": ""
+    },
+    {
+      "id": "F6",
+      "verdict": "confirmed",
+      "severity": "info",
+      "reasoning": "modules/bitcoind.nix:442 applies chmod 0640 to the cookie, and line 332 sets rpcwhitelistdefault=0 without a cookie-user whitelist. Group members therefore receive unrestricted RPC; line 469 deliberately grants that group to the operator.",
+      "fix_ok": true,
+      "fix_note": ""
+    },
+    {
+      "id": "F-1",
+      "verdict": "confirmed",
+      "severity": "low",
+      "reasoning": "modules/presets/wireguard.nix:207 binds REST to all addresses, with the interface/source firewall allowance at line 175. The firewall controls network reachability, but its failure does not itself bypass lnd's TLS and macaroon authentication; medium severity overstates the demonstrated consequence.",
+      "fix_ok": true,
+      "fix_note": ""
+    },
+    {
+      "id": "F-2",
+      "verdict": "false-positive",
+      "severity": "info",
+      "reasoning": "modules/operator.nix:54 limits NOPASSWD to cfg.allowRunAsUsers, whose default is empty; modules/lnd.nix:323 adds only the lnd user, not root. Funds administration is real, but host-root equivalence does not follow; secure-node.nix:51 separately copies root's authorized public keys, making compromise of a shared private key a different case.",
+      "fix_ok": false,
+      "fix_note": "Document funds-admin privileges and shared SSH-key risk separately from host-root access. The stated root-equivalence claim should be corrected."
+    },
+    {
+      "id": "F-3",
+      "verdict": "confirmed",
+      "severity": "low",
+      "reasoning": ".github/cve-whitelist.toml:30-70 contains pname entries without CVE, version, or expiry restrictions. test/ci/cve-scan.sh:42 applies them without checking closure membership, so future applicable CVEs can disappear from reporting.",
+      "fix_ok": true,
+      "fix_note": ""
+    },
+    {
+      "id": "F-4",
+      "verdict": "confirmed",
+      "severity": "low",
+      "reasoning": ".github/workflows/release-tag.yml:65 creates unsigned annotated tags and performs no commit-signature check. The unsigned-pointer concern is real, but an existing flake.lock does not silently follow a moved tag or release branch; advancing the lock is required.",
+      "fix_ok": false,
+      "fix_note": "Consumers must verify signatures against an independently trusted maintainer key. Workflow-only verification can be bypassed by the compromised CI/token actor described, and signing alone does not protect consumers that never verify."
+    },
+    {
+      "id": "F-5",
+      "verdict": "needs-info",
+      "severity": "info",
+      "reasoning": ".github/workflows/release-tag.yml:3-4 asserts branch protection only in a comment, and SECURITY.md:72-78 describes signature verification. HEAD contains an SSH signature, but effective GitHub rules, bypass permissions, verification status, and the trusted signer identity require external evidence.",
+      "fix_ok": true,
+      "fix_note": ""
+    },
+    {
+      "id": "F-6",
+      "verdict": "confirmed",
+      "severity": "info",
+      "reasoning": "modules/btcpayserver.nix:199 and :247 disable systemd MemoryDenyWriteExecute for both services. The remaining defaultHardening settings are retained; absence of this particular enforcement does not prove absence of runtime-managed W^X.",
+      "fix_ok": true,
+      "fix_note": ""
+    },
+    {
+      "id": "F-7",
+      "verdict": "needs-info",
+      "severity": "info",
+      "reasoning": "No file, baseline, or reviewed diff supports this repository-wide conclusion. The inspected constructs do not establish compromise, but checking these findings cannot certify the absence of backdoors or compromised dependencies throughout the fork.",
+      "fix_ok": false,
+      "fix_note": "Re-auditing updates is sensible, but the blanket assurance needs a defined baseline, review scope, and dependency-provenance evidence."
+    }
+  ],
+  "missed": [
+    {
+      "file": "modules/presets/wireguard.nix",
+      "line": 111,
+      "severity": "low",
+      "title": "Peer restriction permits a disabled firewall",
+      "description": "The firewall assertion is conditional only on lndconnect. With lndconnect disabled, restrictPeer=true and firewall.enable=false evaluate successfully, but neither peer REJECT rule runs; other host addresses and, where forwarding permits, routed destinations remain reachable. Require the firewall whenever lndconnect or restrictPeer is enabled."
+    },
+    {
+      "file": "modules/presets/wireguard.nix",
+      "line": 115,
+      "severity": "medium",
+      "title": "Backend guard misses firewalld",
+      "description": "Checking only networking.nftables.enable does not guarantee the iptables backend. The pinned NixOS supports services.firewalld.enable, which selects backend=\"firewalld\" without enabling networking.nftables and ignores extraCommands/extraStopCommands; the preset's peer restrictions silently disappear. Assert networking.firewall.backend == \"iptables\"."
+    },
+    {
+      "file": ".github/workflows/release-tag.yml",
+      "line": 40,
+      "severity": "low",
+      "title": "Helper-only security fixes receive no release tag",
+      "description": "The release-change filter omits helper/, although helper/makeShell.nix supplies executable deployment-shell and updater code. A release-branch push fixing only that code is skipped, so update-nix-bitcoin users remain on the preceding tag until another qualifying change occurs."
+    }
+  ],
+  "summary": "Most findings describe real but low-severity hardening or trust boundaries; operator access is not automatically host-root access, and three claims require additional evidence. The missed firewall guards and release filter are concrete defects. Review was read-only, including inspection of the exact pinned NixOS firewall implementation."
+}
