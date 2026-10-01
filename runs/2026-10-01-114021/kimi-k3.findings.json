@@ -1,0 +1,74 @@
+[
+  {
+    "id": "A2026-10-01-1",
+    "title": "Demo QEMU VM forwards SSH on all host interfaces with a committed private key",
+    "severity": "low",
+    "status": "open",
+    "location": "examples/qemu-vm/run-vm.sh:29 (hostfwd=tcp::${sshPort}-:22), examples/qemu-vm/id-vm, examples/qemu-vm/vm-config.nix:12, examples/deploy-krops.sh",
+    "description": "The empty host part in QEMU's hostfwd binds the forwarded SSH port on 0.0.0.0, and the demo VM authorizes the repo's committed id-vm key for root. While a demo runs, anyone who can reach the host on port 60734 (LAN, or internet on an exposed host) gets a root shell in the VM using the public key. deploy-krops.sh additionally disables StrictHostKeyChecking. The script warns to replace the key 'for anything serious', but the world-reachable bind itself is unflagged and unnecessary.",
+    "impact": "Unauthenticated network access to a root shell in the demo VM; theft of any real secrets a user experiments with inside it.",
+    "recommendation": "Bind the forward to loopback: hostfwd=tcp:127.0.0.1:${sshPort}-:22. Keep the existing key-replacement warning.",
+    "file": "examples/qemu-vm/run-vm.sh:29 (hostfwd=tcp::${sshPort}-:22), examples/qemu-vm/id-vm, examples/qemu-vm/vm-config.nix:12, examples/deploy-krops.sh",
+    "line": 0
+  },
+  {
+    "id": "A2026-10-01-2",
+    "title": "lnd one point release behind upstream (0.21.3-beta vs 0.21.4-beta)",
+    "severity": "low",
+    "status": "open",
+    "location": "flake.lock (nixpkgs-unstable @ b6c8664d), pkgs/pinned.nix",
+    "description": "lnd 0.21.4-beta fixes HTLC-lifecycle bugs that can leave HTLCs pending and cause unnecessary force closes (on-chain fee loss / funds availability), plus an AMP invoice-cancellation bug. Not an upstream security advisory. The fork's weekly pin cadence (helper/update-flake.sh, autotest gate) closes this automatically; noted here for completeness.",
+    "impact": "Known upstream bugs affecting channel liveness remain until the next pin.",
+    "recommendation": "No action beyond the normal weekly pin update. Same for electrs 0.11.0 -> 0.12.0 (rewrite, no security content, but watch whether 0.11.x keeps receiving fixes).",
+    "file": "flake.lock (nixpkgs-unstable @ b6c8664d), pkgs/pinned.nix",
+    "line": 0
+  },
+  {
+    "id": "A2026-10-01-3",
+    "title": "wireguard preset: lnd admin REST API bound to 0.0.0.0, guarded only by iptables",
+    "severity": "low",
+    "status": "known-open (documented deferral)",
+    "location": "modules/presets/wireguard.nix:207, docs/wireguard-rest-bind.md",
+    "description": "With the wireguard preset + lndconnect, the macaroon-admin REST listener binds all interfaces; protection rests solely on the nixos-fw rules (interface-pinned accept, restrictPeer REJECT inserted at top). The fork has added fail-closed assertions (firewall must be enabled, nftables backend rejected) since the 2026-08-24 advisory, which removes the silent-misconfig path; the residual risk is firewall-rule compromise or error. The bind-to-serverAddress fix is deliberately deferred with a documented checklist (TLS SANs, startup ordering, nbLib.address 0.0.0.0->127.0.0.1 coupling).",
+    "impact": "If the iptables guard is ever lost, the lnd admin REST API is network-exposed.",
+    "recommendation": "Work through docs/wireguard-rest-bind.md when bandwidth allows; until then the current assertions are the right guardrail.",
+    "file": "modules/presets/wireguard.nix:207, docs/wireguard-rest-bind.md",
+    "line": 0
+  },
+  {
+    "id": "A2026-10-01-4",
+    "title": "bitcoind RPC cookie group-readable: group 'bitcoin' equals full privileged RPC",
+    "severity": "low",
+    "status": "known-accepted (documented)",
+    "location": "modules/bitcoind.nix postStart (chmod 0640 .cookie)",
+    "description": "Any process in group 'bitcoin' (the operator being the intended one) holds full privileged RPC, including wallet control if a wallet is loaded. Explicitly kept for operator convenience with a warning comment; new services correctly use HMAC rpc users instead. Flagged only because the boundary is easy to widen by accident when adding a service to that group.",
+    "impact": "Group membership in 'bitcoin' silently grants privileged RPC.",
+    "recommendation": "None required. Keep new consumers on rpc.users + HMAC.",
+    "file": "modules/bitcoind.nix postStart (chmod 0640 .cookie)",
+    "line": 0
+  },
+  {
+    "id": "A2026-10-01-5",
+    "title": "test/lib/copy-src.sh reuses a fixed /tmp source-cache path and executes from it",
+    "severity": "informational",
+    "status": "open",
+    "location": "test/lib/copy-src.sh",
+    "description": "The script mv's /tmp/nix-bitcoin-src (a fixed, predictable path) into a mktemp dir, rsyncs the repo over it, and runs test/run-tests.sh from that location, frequently as root for container tests. On a multi-user machine another local user could pre-create or race that path. Dev-only tooling; single-user dev boxes are the norm.",
+    "impact": "Local code-execution-as-tester race on shared machines.",
+    "recommendation": "Skip the cache when /tmp/nix-bitcoin-src is not owned by euid, or key the cache dir by user.",
+    "file": "test/lib/copy-src.sh",
+    "line": 0
+  },
+  {
+    "id": "A2026-10-01-6",
+    "title": "CI evals repo-controlled Nix output in a shell eval; workflow-level CACHIX secrets",
+    "severity": "informational",
+    "status": "open (mitigated by GitHub behavior)",
+    "location": "test/ci/build_test_drivers.sh:21-23, .github/workflows/test.yml",
+    "description": "build_test_drivers.sh runs eval on the output of nix eval of ciTestInfo, which is repository-controlled code, while the workflow exports CACHIX_SIGNING_KEY/CACHIX_AUTH_TOKEN at workflow level. For fork PRs GitHub withholds secrets (and the scripts correctly unset empty ones), so exposure requires a same-repo branch/PR, i.e. an already-trusted author. The residual concern is blast radius: any CI-step RCE reaches the cachix signing key.",
+    "impact": "Signing-key exposure only via a trusted-author path or a separate CI RCE.",
+    "recommendation": "Optional: move secrets from workflow-level env to the single job/step that pushes, and gate the push step on github.event_name != 'pull_request'.",
+    "file": "test/ci/build_test_drivers.sh:21-23, .github/workflows/test.yml",
+    "line": 0
+  }
+]

@@ -1,0 +1,84 @@
+Audit complete. The tree has clearly been through multiple audit rounds; the low-hanging fruit is gone. Summary of what I mapped and what remains open.
+
+## Surface map
+
+**Modules (shipped node code):** `bitcoind.nix`, `lnd.nix`, `electrs.nix`, `btcpayserver.nix` (nbxplorer included), `lndconnect.nix`, `onion-services.nix`, `onion-addresses.nix`, `netns-isolation.nix`, `secrets/secrets.nix`, `backups.nix`, `nodeinfo.nix`, `operator.nix`, `security.nix`, presets (`secure-node`, `hardened`, `hardened-extended`, `enable-tor`, `wireguard`, `bitcoind-remote`), `deployment/` (krops, nixops).
+
+**Packaging/supply chain:** `pkgs/` (nbxplorer 2.6.10, btcpayserver 2.4.4 security override with regenerated hash-locked nuget deps, lndinit 0.1.36-beta, netns-exec, krops pinned by commit), `pkgs/nixpkgs-pinned.nix` (flake.lock pins, narHash-verified), `helper/update-flake.sh` weekly pins.
+
+**CI:** `cve-scan.sh` (vulnix over the runtime closure of a representative node, fail-closed, narrow whitelist), `test.yml`, `release-tag.yml`, all actions SHA-pinned.
+
+**Version posture at this commit:** tor 0.4.9.13 (latest 0.4.9.x), btcpayserver 2.4.4 (latest, via guarded override), bitcoind 31.1 (latest), nbxplorer 2.6.10, lnd 0.21.3-beta (one behind), electrs 0.11.0.
+
+**Verified strong:** the lnd macaroon root `ExecStartPost` (root-only staging, `runuser`-deprivileged admin.macaroon read, `mv -fT`, response cap, regression-tested in `tests.py`); onion-addresses root copy loop (symlink refusal, content validation, build-as-root-then-chown); setup-secrets scoped root sandbox; HEAD's nbxplorer WorkingDirectory fix; every service under `defaultHardening`; no secrets in the Nix store; no world-readable secret modes; the only `0.0.0.0` bind is the documented wireguard one.
+
+## Findings
+
+```json
+[
+  {
+    "id": "A2026-10-01-1",
+    "title": "Demo QEMU VM forwards SSH on all host interfaces with a committed private key",
+    "severity": "low",
+    "status": "open",
+    "location": "examples/qemu-vm/run-vm.sh:29 (hostfwd=tcp::${sshPort}-:22), examples/qemu-vm/id-vm, examples/qemu-vm/vm-config.nix:12, examples/deploy-krops.sh",
+    "description": "The empty host part in QEMU's hostfwd binds the forwarded SSH port on 0.0.0.0, and the demo VM authorizes the repo's committed id-vm key for root. While a demo runs, anyone who can reach the host on port 60734 (LAN, or internet on an exposed host) gets a root shell in the VM using the public key. deploy-krops.sh additionally disables StrictHostKeyChecking. The script warns to replace the key 'for anything serious', but the world-reachable bind itself is unflagged and unnecessary.",
+    "impact": "Unauthenticated network access to a root shell in the demo VM; theft of any real secrets a user experiments with inside it.",
+    "recommendation": "Bind the forward to loopback: hostfwd=tcp:127.0.0.1:${sshPort}-:22. Keep the existing key-replacement warning."
+  },
+  {
+    "id": "A2026-10-01-2",
+    "title": "lnd one point release behind upstream (0.21.3-beta vs 0.21.4-beta)",
+    "severity": "low",
+    "status": "open",
+    "location": "flake.lock (nixpkgs-unstable @ b6c8664d), pkgs/pinned.nix",
+    "description": "lnd 0.21.4-beta fixes HTLC-lifecycle bugs that can leave HTLCs pending and cause unnecessary force closes (on-chain fee loss / funds availability), plus an AMP invoice-cancellation bug. Not an upstream security advisory. The fork's weekly pin cadence (helper/update-flake.sh, autotest gate) closes this automatically; noted here for completeness.",
+    "impact": "Known upstream bugs affecting channel liveness remain until the next pin.",
+    "recommendation": "No action beyond the normal weekly pin update. Same for electrs 0.11.0 -> 0.12.0 (rewrite, no security content, but watch whether 0.11.x keeps receiving fixes)."
+  },
+  {
+    "id": "A2026-10-01-3",
+    "title": "wireguard preset: lnd admin REST API bound to 0.0.0.0, guarded only by iptables",
+    "severity": "low",
+    "status": "known-open (documented deferral)",
+    "location": "modules/presets/wireguard.nix:207, docs/wireguard-rest-bind.md",
+    "description": "With the wireguard preset + lndconnect, the macaroon-admin REST listener binds all interfaces; protection rests solely on the nixos-fw rules (interface-pinned accept, restrictPeer REJECT inserted at top). The fork has added fail-closed assertions (firewall must be enabled, nftables backend rejected) since the 2026-08-24 advisory, which removes the silent-misconfig path; the residual risk is firewall-rule compromise or error. The bind-to-serverAddress fix is deliberately deferred with a documented checklist (TLS SANs, startup ordering, nbLib.address 0.0.0.0->127.0.0.1 coupling).",
+    "impact": "If the iptables guard is ever lost, the lnd admin REST API is network-exposed.",
+    "recommendation": "Work through docs/wireguard-rest-bind.md when bandwidth allows; until then the current assertions are the right guardrail."
+  },
+  {
+    "id": "A2026-10-01-4",
+    "title": "bitcoind RPC cookie group-readable: group 'bitcoin' equals full privileged RPC",
+    "severity": "low",
+    "status": "known-accepted (documented)",
+    "location": "modules/bitcoind.nix postStart (chmod 0640 .cookie)",
+    "description": "Any process in group 'bitcoin' (the operator being the intended one) holds full privileged RPC, including wallet control if a wallet is loaded. Explicitly kept for operator convenience with a warning comment; new services correctly use HMAC rpc users instead. Flagged only because the boundary is easy to widen by accident when adding a service to that group.",
+    "impact": "Group membership in 'bitcoin' silently grants privileged RPC.",
+    "recommendation": "None required. Keep new consumers on rpc.users + HMAC."
+  },
+  {
+    "id": "A2026-10-01-5",
+    "title": "test/lib/copy-src.sh reuses a fixed /tmp source-cache path and executes from it",
+    "severity": "informational",
+    "status": "open",
+    "location": "test/lib/copy-src.sh",
+    "description": "The script mv's /tmp/nix-bitcoin-src (a fixed, predictable path) into a mktemp dir, rsyncs the repo over it, and runs test/run-tests.sh from that location, frequently as root for container tests. On a multi-user machine another local user could pre-create or race that path. Dev-only tooling; single-user dev boxes are the norm.",
+    "impact": "Local code-execution-as-tester race on shared machines.",
+    "recommendation": "Skip the cache when /tmp/nix-bitcoin-src is not owned by euid, or key the cache dir by user."
+  },
+  {
+    "id": "A2026-10-01-6",
+    "title": "CI evals repo-controlled Nix output in a shell eval; workflow-level CACHIX secrets",
+    "severity": "informational",
+    "status": "open (mitigated by GitHub behavior)",
+    "location": "test/ci/build_test_drivers.sh:21-23, .github/workflows/test.yml",
+    "description": "build_test_drivers.sh runs eval on the output of nix eval of ciTestInfo, which is repository-controlled code, while the workflow exports CACHIX_SIGNING_KEY/CACHIX_AUTH_TOKEN at workflow level. For fork PRs GitHub withholds secrets (and the scripts correctly unset empty ones), so exposure requires a same-repo branch/PR, i.e. an already-trusted author. The residual concern is blast radius: any CI-step RCE reaches the cachix signing key.",
+    "impact": "Signing-key exposure only via a trusted-author path or a separate CI RCE.",
+    "recommendation": "Optional: move secrets from workflow-level env to the single job/step that pushes, and gate the push step on github.event_name != 'pull_request'."
+  }
+]
+```
+
+**Net assessment:** no high or critical findings at `b314aa9`. The two prior audit cycles (2026-08-14, 08-29/30, 09-09 gates) closed the real attack surface, and the fixes I re-verified (macaroon root script, onion-addresses, setup-secrets sandbox, cve-scan fail-closed, btcpayserver 2.4.4 override, HEAD's nbxplorer content-root fix) are complete and regression-tested. Open items are one demo-tooling footgun (#1), routine version lag that self-heals on the weekly pin (#2), and three documented/accepted postures (#3-#6).
+
+Skipped: deeper audit of pinned nixpkgs-internal components (kernel/sshd/openssl) — covered by the fork's weekly vulnix CI, not by manual review.

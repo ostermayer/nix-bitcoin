@@ -1,0 +1,186 @@
+[
+  {
+    "id": "A2026-10-01-1",
+    "title": "Demo QEMU VM forwards SSH on all host interfaces with a committed private key",
+    "severity": "low",
+    "status": "open",
+    "location": "examples/qemu-vm/run-vm.sh:29 (hostfwd=tcp::${sshPort}-:22), examples/qemu-vm/id-vm, examples/qemu-vm/vm-config.nix:12, examples/deploy-krops.sh",
+    "description": "The empty host part in QEMU's hostfwd binds the forwarded SSH port on 0.0.0.0, and the demo VM authorizes the repo's committed id-vm key for root. While a demo runs, anyone who can reach the host on port 60734 (LAN, or internet on an exposed host) gets a root shell in the VM using the public key. deploy-krops.sh additionally disables StrictHostKeyChecking. The script warns to replace the key 'for anything serious', but the world-reachable bind itself is unflagged and unnecessary.",
+    "impact": "Unauthenticated network access to a root shell in the demo VM; theft of any real secrets a user experiments with inside it.",
+    "recommendation": "Bind the forward to loopback: hostfwd=tcp:127.0.0.1:${sshPort}-:22. Keep the existing key-replacement warning.",
+    "file": "examples/qemu-vm/run-vm.sh:29 (hostfwd=tcp::${sshPort}-:22), examples/qemu-vm/id-vm, examples/qemu-vm/vm-config.nix:12, examples/deploy-krops.sh",
+    "line": 0,
+    "model": "kimi-k3"
+  },
+  {
+    "id": "A2026-10-01-2",
+    "title": "lnd one point release behind upstream (0.21.3-beta vs 0.21.4-beta)",
+    "severity": "low",
+    "status": "open",
+    "location": "flake.lock (nixpkgs-unstable @ b6c8664d), pkgs/pinned.nix",
+    "description": "lnd 0.21.4-beta fixes HTLC-lifecycle bugs that can leave HTLCs pending and cause unnecessary force closes (on-chain fee loss / funds availability), plus an AMP invoice-cancellation bug. Not an upstream security advisory. The fork's weekly pin cadence (helper/update-flake.sh, autotest gate) closes this automatically; noted here for completeness.",
+    "impact": "Known upstream bugs affecting channel liveness remain until the next pin.",
+    "recommendation": "No action beyond the normal weekly pin update. Same for electrs 0.11.0 -> 0.12.0 (rewrite, no security content, but watch whether 0.11.x keeps receiving fixes).",
+    "file": "flake.lock (nixpkgs-unstable @ b6c8664d), pkgs/pinned.nix",
+    "line": 0,
+    "model": "kimi-k3"
+  },
+  {
+    "id": "A2026-10-01-3",
+    "title": "wireguard preset: lnd admin REST API bound to 0.0.0.0, guarded only by iptables",
+    "severity": "low",
+    "status": "known-open (documented deferral)",
+    "location": "modules/presets/wireguard.nix:207, docs/wireguard-rest-bind.md",
+    "description": "With the wireguard preset + lndconnect, the macaroon-admin REST listener binds all interfaces; protection rests solely on the nixos-fw rules (interface-pinned accept, restrictPeer REJECT inserted at top). The fork has added fail-closed assertions (firewall must be enabled, nftables backend rejected) since the 2026-08-24 advisory, which removes the silent-misconfig path; the residual risk is firewall-rule compromise or error. The bind-to-serverAddress fix is deliberately deferred with a documented checklist (TLS SANs, startup ordering, nbLib.address 0.0.0.0->127.0.0.1 coupling).",
+    "impact": "If the iptables guard is ever lost, the lnd admin REST API is network-exposed.",
+    "recommendation": "Work through docs/wireguard-rest-bind.md when bandwidth allows; until then the current assertions are the right guardrail.",
+    "file": "modules/presets/wireguard.nix:207, docs/wireguard-rest-bind.md",
+    "line": 0,
+    "model": "kimi-k3"
+  },
+  {
+    "id": "A2026-10-01-4",
+    "title": "bitcoind RPC cookie group-readable: group 'bitcoin' equals full privileged RPC",
+    "severity": "low",
+    "status": "known-accepted (documented)",
+    "location": "modules/bitcoind.nix postStart (chmod 0640 .cookie)",
+    "description": "Any process in group 'bitcoin' (the operator being the intended one) holds full privileged RPC, including wallet control if a wallet is loaded. Explicitly kept for operator convenience with a warning comment; new services correctly use HMAC rpc users instead. Flagged only because the boundary is easy to widen by accident when adding a service to that group.",
+    "impact": "Group membership in 'bitcoin' silently grants privileged RPC.",
+    "recommendation": "None required. Keep new consumers on rpc.users + HMAC.",
+    "file": "modules/bitcoind.nix postStart (chmod 0640 .cookie)",
+    "line": 0,
+    "model": "kimi-k3"
+  },
+  {
+    "id": "A2026-10-01-5",
+    "title": "test/lib/copy-src.sh reuses a fixed /tmp source-cache path and executes from it",
+    "severity": "informational",
+    "status": "open",
+    "location": "test/lib/copy-src.sh",
+    "description": "The script mv's /tmp/nix-bitcoin-src (a fixed, predictable path) into a mktemp dir, rsyncs the repo over it, and runs test/run-tests.sh from that location, frequently as root for container tests. On a multi-user machine another local user could pre-create or race that path. Dev-only tooling; single-user dev boxes are the norm.",
+    "impact": "Local code-execution-as-tester race on shared machines.",
+    "recommendation": "Skip the cache when /tmp/nix-bitcoin-src is not owned by euid, or key the cache dir by user.",
+    "file": "test/lib/copy-src.sh",
+    "line": 0,
+    "model": "kimi-k3"
+  },
+  {
+    "id": "A2026-10-01-6",
+    "title": "CI evals repo-controlled Nix output in a shell eval; workflow-level CACHIX secrets",
+    "severity": "informational",
+    "status": "open (mitigated by GitHub behavior)",
+    "location": "test/ci/build_test_drivers.sh:21-23, .github/workflows/test.yml",
+    "description": "build_test_drivers.sh runs eval on the output of nix eval of ciTestInfo, which is repository-controlled code, while the workflow exports CACHIX_SIGNING_KEY/CACHIX_AUTH_TOKEN at workflow level. For fork PRs GitHub withholds secrets (and the scripts correctly unset empty ones), so exposure requires a same-repo branch/PR, i.e. an already-trusted author. The residual concern is blast radius: any CI-step RCE reaches the cachix signing key.",
+    "impact": "Signing-key exposure only via a trusted-author path or a separate CI RCE.",
+    "recommendation": "Optional: move secrets from workflow-level env to the single job/step that pushes, and gate the push step on github.event_name != 'pull_request'.",
+    "file": "test/ci/build_test_drivers.sh:21-23, .github/workflows/test.yml",
+    "line": 0,
+    "model": "kimi-k3"
+  },
+  {
+    "id": "F-01",
+    "title": "lnd admin REST API bound to 0.0.0.0 by the wireguard preset, protected by the firewall alone",
+    "severity": "medium",
+    "status": "open, documented as deferred (docs/wireguard-rest-bind.md)",
+    "locations": [
+      "modules/presets/wireguard.nix:207",
+      "docs/wireguard-rest-bind.md"
+    ],
+    "summary": "When lndconnect is enabled, the preset sets services.lnd.restAddress to 0.0.0.0. The macaroon-admin REST API listens on every interface, including the external one. The only protection is the nixos-fw default drop plus a single accept rule scoped to the wg interface and peer.",
+    "detail": "The 2026-09-09 guards (firewall-must-be-enabled assertion, nftables refusal, -i wg-nb -s peer scoping) closed the silent-loss paths, but the bind itself remains. Residual risk: any other configuration that admits lnd.restPort through the firewall (allowedTCPPorts, a container port forward, a second interface rule) silently exposes the admin API on that network. The in-repo deferral doc explains why a naive rebind breaks six consumers and prescribes the safe variant: keep restAddress at 127.0.0.1 and add a second restlisten on the wg server address, with lnd ordered after wireguard-wg-nb.",
+    "recommendation": "Implement the second-restlisten variant from docs/wireguard-rest-bind.md, including its pre-flight checklist (ordering, TLS SANs are not needed for the nocert path, cold-boot test asserting REST is not reachable on the external interface).",
+    "file": "?",
+    "line": 0,
+    "model": "glm-5p3"
+  },
+  {
+    "id": "F-02",
+    "title": "bitcoind RPC cookie is group-readable: every member of group bitcoin gets full privileged RPC",
+    "severity": "low",
+    "status": "accepted by design, documented in code",
+    "locations": [
+      "modules/bitcoind.nix:442"
+    ],
+    "summary": "postStart chmods the .cookie to 0640 bitcoin:bitcoin. The operator user is placed in that group by default, so operator convenience and full wallet-capable RPC share one boundary.",
+    "detail": "Carried from upstream audit finding L-10. The code comment documents the trade-off and directs new services to use an rpc user plus HMAC instead. The explicit 0640 does clear the other-read bit that a bare chmod g=r would leave to the daemon's umask.",
+    "recommendation": "None required now. Keep group membership minimal and prefer the existing rpc-user pattern for any new consumer.",
+    "file": "?",
+    "line": 0,
+    "model": "glm-5p3"
+  },
+  {
+    "id": "F-03",
+    "title": "btcpayserver fetches price rates over clearnet, correlating invoice activity with the node IP",
+    "severity": "low",
+    "status": "open, documented (TODO-EXTERNAL)",
+    "locations": [
+      "modules/presets/enable-tor.nix:24"
+    ],
+    "summary": "Tor enforcement is deliberately disabled for btcpayserver because it cannot yet fetch rates over Tor. An observer of the rate providers can correlate invoice creation times with the node IP.",
+    "detail": "Privacy-only impact, no fund or auth exposure. Flagged both in the preset and in examples/configuration.nix.",
+    "recommendation": "Track upstream btcpayserver rate-fetch proxy support and re-enable enforcement when it lands.",
+    "file": "?",
+    "line": 0,
+    "model": "glm-5p3"
+  },
+  {
+    "id": "F-04",
+    "title": "netns-isolation service ids are not asserted unique",
+    "severity": "low",
+    "status": "open (code TODO)",
+    "locations": [
+      "modules/netns-isolation.nix:21"
+    ],
+    "summary": "Two services configured with the same id produce identical veth and interface names. The collision surfaces as broken netns setup, not as a silent security bypass.",
+    "detail": "Misconfiguration robustness only. The option docs say ids must be unique, but nothing enforces it.",
+    "recommendation": "Add an assertion comparing the id list for duplicates.",
+    "file": "?",
+    "line": 0,
+    "model": "glm-5p3"
+  },
+  {
+    "id": "F-05",
+    "title": "nix-bitcoin-wg-connect without an explicit host queries external-IP providers in clearnet",
+    "severity": "info",
+    "status": "open, documented in code",
+    "locations": [
+      "modules/presets/wireguard.nix:67"
+    ],
+    "summary": "The default QR generation path uses lndconnect's go-external-ip, which contacts a set of external IP providers. This reveals to those providers that this address runs an lndconnect-style node.",
+    "detail": "Operator-invoked, interactive only. The docs show the explicit-host form that avoids it.",
+    "recommendation": "None required. Operators who care can pass the host explicitly, as docs/services.md already shows.",
+    "file": "?",
+    "line": 0,
+    "model": "glm-5p3"
+  },
+  {
+    "id": "F-06",
+    "title": "The shared 'public' RPC user whitelist includes getpeerinfo and getnodeaddresses",
+    "severity": "info",
+    "status": "documented conditional, in-code note",
+    "locations": [
+      "modules/bitcoind-rpc-public-whitelist.nix:18-22"
+    ],
+    "summary": "These two calls leak peer topology. They are kept because lnd's chain-backend health check and pruned block fetching require them, and this user is also the local services' RPC user.",
+    "detail": "Only matters if an operator actually exposes this RPC user over a public proxy. The whitelist file itself tells that operator to narrow the list in their own config.",
+    "recommendation": "None now. If the fork ever ships a public RPC proxy scenario, split the local and public users.",
+    "file": "?",
+    "line": 0,
+    "model": "glm-5p3"
+  },
+  {
+    "id": "F-07",
+    "title": "Flake example ships a plaintext demo login password",
+    "severity": "info",
+    "status": "open, flagged in-file",
+    "locations": [
+      "examples/flakes/flake.nix:55"
+    ],
+    "summary": "The example node user is defined with password = \"a\" for VM convenience, with an in-file FIXME telling users to switch to hashedPassword or passwordFile.",
+    "detail": "Template convenience for throwaway VMs. The FIXME already names the secure alternatives.",
+    "recommendation": "None required. Could switch the template to initialPassword with a forced change, but the FIXME suffices.",
+    "file": "?",
+    "line": 0,
+    "model": "glm-5p3"
+  }
+]
