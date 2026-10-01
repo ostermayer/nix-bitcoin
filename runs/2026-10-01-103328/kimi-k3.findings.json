@@ -1,0 +1,68 @@
+[
+  {
+    "id": "F1",
+    "title": "wireguard preset binds lnd admin REST API to 0.0.0.0, guarded only by iptables",
+    "severity": "low",
+    "status": "residual-risk, known and accepted by the fork (docs/wireguard-rest-bind.md)",
+    "location": "modules/presets/wireguard.nix:185-200 (services.lnd.restAddress = \"0.0.0.0\" when lndconnect enabled)",
+    "description": "With lndconnect enabled, the macaroon-admin lnd REST listener binds all interfaces. Protection rests entirely on the nixos-fw ruleset: an accept rule pinned to -i wg-nb and the single peer /32, and the default-drop policy. The fork already added the two silent-failure guards (eval assertions requiring networking.firewall.enable and rejecting the nftables backend, which would drop extraCommands) and interface-scoped the accept rule, so the remaining exposure is: any local firewall misconfiguration, future module that opens the port, or an iptables flush event exposes an admin API (admin.macaroon is the only remaining auth factor). Deferred fix (bind to the WireGuard server address) is documented with a breakage checklist.",
+    "recommendation": "Work through docs/wireguard-rest-bind.md and bind to serverAddress (needs systemd ordering on wireguard-wg-nb, TLS SAN via services.lnd.certificate.extraIPs, and macaroon/btcpayserver/lndconnect-onion consumer migration). Until then, keep the eval assertions as-is.",
+    "file": "modules/presets/wireguard.nix:185-200 (services.lnd.restAddress = \"0.0.0.0\" when lndconnect enabled)",
+    "line": 0
+  },
+  {
+    "id": "F2",
+    "title": "restrictPeer FORWARD REJECT rule has an asymmetric add/remove lifecycle",
+    "severity": "info",
+    "status": "open, fail-closed (availability only)",
+    "location": "modules/presets/wireguard.nix:166-192 (networking.firewall extraCommands/extraStopCommands)",
+    "description": "The peer REJECT is inserted with `iptables -I FORWARD 1` on every firewall start but removed with `-D` in extraStopCommands, which exists only while restrictPeer=true. Flipping restrictPeer true->false leaves the stale REJECT in the kernel FORWARD chain until reboot (NixOS flushes its own nixos-fw chain on stop but not builtin FORWARD, and the new unit no longer carries the -D command); flipping back re-inserts a duplicate. Over-blocking only, no exposure.",
+    "recommendation": "Make the removal unconditional (move the `-D FORWARD ... || :` out of the mkIf), or accept and document that restrictPeer changes need a reboot/firewall restart with manual `iptables -D FORWARD` cleanup.",
+    "file": "modules/presets/wireguard.nix:166-192 (networking.firewall extraCommands/extraStopCommands)",
+    "line": 0
+  },
+  {
+    "id": "F3",
+    "title": "Release distribution relies on unsigned CI-created tags plus manual commit review",
+    "severity": "info",
+    "status": "documented trust model (SECURITY.md), residual",
+    "location": ".github/workflows/release-tag.yml, helper/makeShell.nix (update-nix-bitcoin)",
+    "description": "Release tags are annotated but unsigned, created by github-actions[bot] on push to `release`. update-nix-bitcoin resolves the newest tag via git ls-remote, prefetches the commit tarball, and rewrites nix-bitcoin-release.nix; integrity for the user reduces to GitHub transport plus the user actually reviewing the printed compare URL before re-entering the shell (the helper correctly removed the auto `exec nix-shell`). A compromised GitHub account or CI token could point the latest tag at malicious content and only a reviewing user would notice.",
+    "recommendation": "If the maintainer's threat model allows, sign release tags (or commits on `release`) with the maintainer key and have update-nix-bitcoin verify the signature before writing the pin; the infrastructure (SSH/GPG signing) is already described in SECURITY.md.",
+    "file": ".github/workflows/release-tag.yml, helper/makeShell.nix (update-nix-bitcoin)",
+    "line": 0
+  },
+  {
+    "id": "F4",
+    "title": "Fork-carried btcpayserver 2.4.4 package and nuget lockfile sit outside nixpkgs review",
+    "severity": "info",
+    "status": "verification limit, intentional design (version-guarded override)",
+    "location": "pkgs/btcpayserver/default.nix, pkgs/btcpayserver/deps-2.4.4.json, pkgs/overrides.nix",
+    "description": "This is the one place the fork substitutes its own source hash and 193-entry nuget lockfile for a funds-adjacent, internet-facing service ahead of the pinned nixpkgs. All fetches are content-hash-pinned so tampering after the fact fails the build, but correctness of the hashes as introduced cannot be independently re-verified from this environment (version predates available upstream data). The override is properly version-guarded (`lagging` check) so it goes inert once nixpkgs ships >= 2.4.4.",
+    "recommendation": "Drop pkgs/btcpayserver + the overrides.nix entry as soon as the pinned nixpkgs carries btcpayserver >= 2.4.4, as the header comment already instructs; consider regenerating the lockfile from the upstream release tarball on each future override.",
+    "file": "pkgs/btcpayserver/default.nix, pkgs/btcpayserver/deps-2.4.4.json, pkgs/overrides.nix",
+    "line": 0
+  },
+  {
+    "id": "F5",
+    "title": "MemoryDenyWriteExecute disabled for nbxplorer and btcpayserver (.NET JIT)",
+    "severity": "info",
+    "status": "accepted trade-off, documented in code",
+    "location": "modules/btcpayserver.nix:190-201 and :246-247",
+    "description": "Both .NET services run with W^X off because the JIT needs writable+executable pages. The rest of the sandbox (defaultHardening: ProtectSystem=strict, PrivateUsers, no capabilities, syscall filter, IP allowlisting) is intact, and the head commit confines the NBXplorer filesystem watcher to its data dir. This is inherent to shipping .NET under systemd hardening, not a fork defect.",
+    "recommendation": "None actionable; keep the remaining defaultHardening intact and revisit if .NET on Linux ever supports a hardened JIT mode.",
+    "file": "modules/btcpayserver.nix:190-201 and :246-247",
+    "line": 0
+  },
+  {
+    "id": "F6",
+    "title": "bitcoind RPC cookie is group-readable (group bitcoin = full privileged RPC)",
+    "severity": "info",
+    "status": "documented design decision (audit L-10 comment in tree)",
+    "location": "modules/bitcoind.nix:435-443 (postStart chmod 0640 .cookie)",
+    "description": "Any process in group `bitcoin` can read the RPC cookie and thereby bypass the rpcauth HMAC + whitelist scheme entirely (cookie auth is full-privilege). The fork tightened this from upstream's `chmod g=r` (which preserved whatever other-read bit the daemon's umask left) to an explicit 0640, and current group membership is minimal (operator). The boundary holds only as long as no service joins group bitcoin.",
+    "recommendation": "Keep the cookie consumer set fixed; new local consumers should get a dedicated rpc user + HMAC instead of group membership, as the in-tree comment already states.",
+    "file": "modules/bitcoind.nix:435-443 (postStart chmod 0640 .cookie)",
+    "line": 0
+  }
+]

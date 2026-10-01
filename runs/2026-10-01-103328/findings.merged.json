@@ -1,0 +1,195 @@
+[
+  {
+    "id": "F1",
+    "title": "wireguard preset binds lnd admin REST API to 0.0.0.0, guarded only by iptables",
+    "severity": "low",
+    "status": "residual-risk, known and accepted by the fork (docs/wireguard-rest-bind.md)",
+    "location": "modules/presets/wireguard.nix:185-200 (services.lnd.restAddress = \"0.0.0.0\" when lndconnect enabled)",
+    "description": "With lndconnect enabled, the macaroon-admin lnd REST listener binds all interfaces. Protection rests entirely on the nixos-fw ruleset: an accept rule pinned to -i wg-nb and the single peer /32, and the default-drop policy. The fork already added the two silent-failure guards (eval assertions requiring networking.firewall.enable and rejecting the nftables backend, which would drop extraCommands) and interface-scoped the accept rule, so the remaining exposure is: any local firewall misconfiguration, future module that opens the port, or an iptables flush event exposes an admin API (admin.macaroon is the only remaining auth factor). Deferred fix (bind to the WireGuard server address) is documented with a breakage checklist.",
+    "recommendation": "Work through docs/wireguard-rest-bind.md and bind to serverAddress (needs systemd ordering on wireguard-wg-nb, TLS SAN via services.lnd.certificate.extraIPs, and macaroon/btcpayserver/lndconnect-onion consumer migration). Until then, keep the eval assertions as-is.",
+    "file": "modules/presets/wireguard.nix:185-200 (services.lnd.restAddress = \"0.0.0.0\" when lndconnect enabled)",
+    "line": 0,
+    "model": "kimi-k3"
+  },
+  {
+    "id": "F2",
+    "title": "restrictPeer FORWARD REJECT rule has an asymmetric add/remove lifecycle",
+    "severity": "info",
+    "status": "open, fail-closed (availability only)",
+    "location": "modules/presets/wireguard.nix:166-192 (networking.firewall extraCommands/extraStopCommands)",
+    "description": "The peer REJECT is inserted with `iptables -I FORWARD 1` on every firewall start but removed with `-D` in extraStopCommands, which exists only while restrictPeer=true. Flipping restrictPeer true->false leaves the stale REJECT in the kernel FORWARD chain until reboot (NixOS flushes its own nixos-fw chain on stop but not builtin FORWARD, and the new unit no longer carries the -D command); flipping back re-inserts a duplicate. Over-blocking only, no exposure.",
+    "recommendation": "Make the removal unconditional (move the `-D FORWARD ... || :` out of the mkIf), or accept and document that restrictPeer changes need a reboot/firewall restart with manual `iptables -D FORWARD` cleanup.",
+    "file": "modules/presets/wireguard.nix:166-192 (networking.firewall extraCommands/extraStopCommands)",
+    "line": 0,
+    "model": "kimi-k3"
+  },
+  {
+    "id": "F3",
+    "title": "Release distribution relies on unsigned CI-created tags plus manual commit review",
+    "severity": "info",
+    "status": "documented trust model (SECURITY.md), residual",
+    "location": ".github/workflows/release-tag.yml, helper/makeShell.nix (update-nix-bitcoin)",
+    "description": "Release tags are annotated but unsigned, created by github-actions[bot] on push to `release`. update-nix-bitcoin resolves the newest tag via git ls-remote, prefetches the commit tarball, and rewrites nix-bitcoin-release.nix; integrity for the user reduces to GitHub transport plus the user actually reviewing the printed compare URL before re-entering the shell (the helper correctly removed the auto `exec nix-shell`). A compromised GitHub account or CI token could point the latest tag at malicious content and only a reviewing user would notice.",
+    "recommendation": "If the maintainer's threat model allows, sign release tags (or commits on `release`) with the maintainer key and have update-nix-bitcoin verify the signature before writing the pin; the infrastructure (SSH/GPG signing) is already described in SECURITY.md.",
+    "file": ".github/workflows/release-tag.yml, helper/makeShell.nix (update-nix-bitcoin)",
+    "line": 0,
+    "model": "kimi-k3"
+  },
+  {
+    "id": "F4",
+    "title": "Fork-carried btcpayserver 2.4.4 package and nuget lockfile sit outside nixpkgs review",
+    "severity": "info",
+    "status": "verification limit, intentional design (version-guarded override)",
+    "location": "pkgs/btcpayserver/default.nix, pkgs/btcpayserver/deps-2.4.4.json, pkgs/overrides.nix",
+    "description": "This is the one place the fork substitutes its own source hash and 193-entry nuget lockfile for a funds-adjacent, internet-facing service ahead of the pinned nixpkgs. All fetches are content-hash-pinned so tampering after the fact fails the build, but correctness of the hashes as introduced cannot be independently re-verified from this environment (version predates available upstream data). The override is properly version-guarded (`lagging` check) so it goes inert once nixpkgs ships >= 2.4.4.",
+    "recommendation": "Drop pkgs/btcpayserver + the overrides.nix entry as soon as the pinned nixpkgs carries btcpayserver >= 2.4.4, as the header comment already instructs; consider regenerating the lockfile from the upstream release tarball on each future override.",
+    "file": "pkgs/btcpayserver/default.nix, pkgs/btcpayserver/deps-2.4.4.json, pkgs/overrides.nix",
+    "line": 0,
+    "model": "kimi-k3"
+  },
+  {
+    "id": "F5",
+    "title": "MemoryDenyWriteExecute disabled for nbxplorer and btcpayserver (.NET JIT)",
+    "severity": "info",
+    "status": "accepted trade-off, documented in code",
+    "location": "modules/btcpayserver.nix:190-201 and :246-247",
+    "description": "Both .NET services run with W^X off because the JIT needs writable+executable pages. The rest of the sandbox (defaultHardening: ProtectSystem=strict, PrivateUsers, no capabilities, syscall filter, IP allowlisting) is intact, and the head commit confines the NBXplorer filesystem watcher to its data dir. This is inherent to shipping .NET under systemd hardening, not a fork defect.",
+    "recommendation": "None actionable; keep the remaining defaultHardening intact and revisit if .NET on Linux ever supports a hardened JIT mode.",
+    "file": "modules/btcpayserver.nix:190-201 and :246-247",
+    "line": 0,
+    "model": "kimi-k3"
+  },
+  {
+    "id": "F6",
+    "title": "bitcoind RPC cookie is group-readable (group bitcoin = full privileged RPC)",
+    "severity": "info",
+    "status": "documented design decision (audit L-10 comment in tree)",
+    "location": "modules/bitcoind.nix:435-443 (postStart chmod 0640 .cookie)",
+    "description": "Any process in group `bitcoin` can read the RPC cookie and thereby bypass the rpcauth HMAC + whitelist scheme entirely (cookie auth is full-privilege). The fork tightened this from upstream's `chmod g=r` (which preserved whatever other-read bit the daemon's umask left) to an explicit 0640, and current group membership is minimal (operator). The boundary holds only as long as no service joins group bitcoin.",
+    "recommendation": "Keep the cookie consumer set fixed; new local consumers should get a dedicated rpc user + HMAC instead of group membership, as the in-tree comment already states.",
+    "file": "modules/bitcoind.nix:435-443 (postStart chmod 0640 .cookie)",
+    "line": 0,
+    "model": "kimi-k3"
+  },
+  {
+    "id": "F-1",
+    "title": "lnd admin REST API bound to 0.0.0.0 in the wireguard preset; host firewall is the only protection layer",
+    "severity": "medium",
+    "status": "known-deferred (documented by maintainer, docs/wireguard-rest-bind.md)",
+    "files": [
+      "modules/presets/wireguard.nix"
+    ],
+    "evidence": "services.lnd.restAddress = \"0.0.0.0\" with tor.enforce = false when lndconnect is enabled. The macaroon-admin REST API is reachable on all interfaces; protection is the nixos-fw default-drop plus an accept rule scoped to -i wg-nb from the single peer /32. Assertions refuse a disabled firewall and the nftables backend; restrictPeer REJECT is inserted at chain top.",
+    "impact": "Any firewall bypass, rule regression, or future NixOS firewall semantics change exposes a wallet-admin API to the LAN/WAN. Defense-in-depth is single-layer.",
+    "recommendation": "Work through docs/wireguard-rest-bind.md (systemd ordering, TLS SAN, ExecStartPost/btcpayserver/lndconnect-onion consumers) and bind to the wg address; until then keep the documented advisory.",
+    "confidence": "high",
+    "file": "?",
+    "line": 0,
+    "model": "glm-5p3"
+  },
+  {
+    "id": "F-2",
+    "title": "Operator user is root-equivalent by design (full bitcoind RPC, lnd admin macaroon, NOPASSWD run-as)",
+    "severity": "low",
+    "status": "known-documented (upstream model, warning comments in tree)",
+    "files": [
+      "modules/operator.nix",
+      "modules/bitcoind.nix",
+      "modules/lnd.nix"
+    ],
+    "evidence": "operator is in group bitcoin and reads the privileged RPC cookie (postStart chmod 0640, warning comment audit L-10); operator is in the lnd group and can read admin.macaroon; doas/sudo NOPASSWD to the lnd user.",
+    "impact": "Compromise of the operator account equals compromise of funds and the node. Anyone deploying must treat operator SSH keys as root-equivalent.",
+    "recommendation": "Keep documenting; optionally split operator into a read-only role and a funds-admin role if the fleet ever needs it.",
+    "confidence": "high",
+    "file": "?",
+    "line": 0,
+    "model": "glm-5p3"
+  },
+  {
+    "id": "F-3",
+    "title": "CVE whitelist blanket-pname entries silence all future CVEs for build-toolchain packages if they ever enter the runtime closure",
+    "severity": "low",
+    "status": "known-accepted (own comment: revisit if a service runs one at runtime)",
+    "files": [
+      ".github/cve-whitelist.toml"
+    ],
+    "evidence": "[gcc], [go], [cargo], [binutils], [ninja], [patch], [ada] (and peers) whitelist every current and future CVE for those pnames. The scan target is the node toplevel runtime closure, so the entries should stay inert; if a runtime closure ever legitimately includes one, its CVEs are silently ignored.",
+    "impact": "A future closure change could make a real attack-surface CVE invisible to the weekly scan with no signal.",
+    "recommendation": "Have cve-scan.sh fail or warn when a blanket-whitelisted pname actually appears in the scanned closure.",
+    "confidence": "high",
+    "file": "?",
+    "line": 0,
+    "model": "glm-5p3"
+  },
+  {
+    "id": "F-4",
+    "title": "CalVer release tags are created unsigned by CI",
+    "severity": "low",
+    "status": "known-disclosed (SECURITY.md 'Release Integrity')",
+    "files": [
+      ".github/workflows/release-tag.yml",
+      "SECURITY.md"
+    ],
+    "evidence": "release-tag.yml runs as github-actions[bot] with contents:write and pushes annotated tags with no signing. SECURITY.md states a tag is a convenience pointer, commits are SSH-signed, and instructs pinning by commit + narHash.",
+    "impact": "A compromised CI token could retarget a tag; flake users are bound by flake.lock narHash, but tag-name consumers (github:.../release) would silently track the moved pointer.",
+    "recommendation": "Sign tags with the maintainer SSH key, or have the workflow verify the pushed commit's SSH signature before tagging.",
+    "confidence": "high",
+    "file": "?",
+    "line": 0,
+    "model": "glm-5p3"
+  },
+  {
+    "id": "F-5",
+    "title": "Branch-protection ruleset and GitHub-side signature verification are asserted in comments but unverifiable from the checkout",
+    "severity": "informational",
+    "status": "verification-limit",
+    "files": [
+      ".github/workflows/release-tag.yml",
+      "SECURITY.md",
+      "README.md"
+    ],
+    "evidence": "The trust story ('release branch ruleset only accepts commits with all CI checks green', 'commits are shown as Verified') depends on GitHub-side configuration outside the repo tree.",
+    "impact": "A repo-only audit cannot confirm those controls exist.",
+    "recommendation": "Consumers should verify branch protection and commit signatures on GitHub before trusting the release branch.",
+    "confidence": "high",
+    "file": "?",
+    "line": 0,
+    "model": "glm-5p3"
+  },
+  {
+    "id": "F-6",
+    "title": "MemoryDenyWriteExecute disabled for btcpayserver and nbxplorer (.NET JIT)",
+    "severity": "informational",
+    "status": "known-accepted (documented in modules/btcpayserver.nix)",
+    "files": [
+      "modules/btcpayserver.nix"
+    ],
+    "evidence": "MemoryDenyWriteExecute = false for both .NET services; remainder of defaultHardening, netns/Tor policy, and dedicated users unchanged.",
+    "impact": "W^X enforcement absent on the largest web-facing parsing surface on the node.",
+    "recommendation": "Re-check whether .NET supports W^X-compatible JIT modes on current runtimes.",
+    "confidence": "high",
+    "file": "?",
+    "line": 0,
+    "model": "glm-5p3"
+  },
+  {
+    "id": "F-7",
+    "title": "No backdoor, exfiltration, or supply-chain compromise indicators found in the fork-specific changes",
+    "severity": "none",
+    "status": "verified-clean",
+    "files": [
+      "modules/",
+      "pkgs/",
+      "helper/",
+      "test/",
+      ".github/"
+    ],
+    "evidence": "All 70 fork commits reviewed; full diff from upstream base 37931e5 examined. All fetches HTTPS + hash-pinned from official sources; netns-exec whitelisted to live netns, requires absolute path, drops caps; every fix claimed in docs/security-audit-2026-08-14.md and the 2026-08/09 hardening commits is present in the tree and pinned by VM tests (macaroon symlink canary, wg tunnel reachability, nbxplorer inotify count); CI actions SHA-pinned; cve-scan fail-closed; fork pins itself (not upstream) in all examples.",
+    "impact": "The fork behaves as its README claims: a trimmed, actively hardened continuation, not a trojaned fork.",
+    "recommendation": "None. Re-audit on every nixpkgs pin bump as the project itself prescribes.",
+    "confidence": "high",
+    "file": "?",
+    "line": 0,
+    "model": "glm-5p3"
+  }
+]
