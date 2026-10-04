@@ -1,0 +1,103 @@
+Verified empirically. The evaluation at the pinned nixpkgs confirms: with `networking.firewall.backend = "firewalld"` set directly, all fork assertions pass (`failedAssertions: []`), yet `firewallUnitExists: false`, `firewalldUnitExists: false`, `lndRestAddress: "0.0.0.0"` — a node with no firewall at all. (Control: `backend = "nftables"` fails loudly via nixpkgs' own extraCommands assertion; `iptables` runs the rules.)
+
+---
+
+# Security audit — ostermayer/nix-bitcoin fork @ d5ac2b83e21b6ab637c62833acf339ca5932f891
+
+## Surface map
+
+The fork trims upstream fort-nix/nix-bitcoin to bitcoind, lnd (+lndinit/lndconnect), electrs, btcpayserver/nbxplorer plus supporting infra. Reviewed in full:
+
+- **Modules** (`modules/`): bitcoind, lnd, lndconnect, electrs, btcpayserver (incl. nbxplorer), netns-isolation + `pkgs/netns-exec` (C source), onion-addresses, onion-services, nodeinfo, operator, security, secrets (setup + generation), backups, nix-bitcoin/lib (`pkgs/lib.nix` defaultHardening), versioning, obsolete-options, and all presets (secure-node, wireguard, hardened, hardened-extended, enable-tor, bitcoind-remote).
+- **Supply chain**: flake.nix/lock pins, pkgs (btcpayserver 2.4.4 override, nbxplorer 2.6.10, lndinit, krops commit-pinned), helper scripts (update-flake, makeShell, fetch-release), examples, `.github/cve-whitelist.toml`.
+- **CI**: test.yml (4 VM scenarios), cve-scan.yml (fail-closed scan verified), release-tag.yml.
+- **Pinned nixpkgs 26.05 sources** (from flake.lock, in store): firewall-iptables/nftables/firewalld/firewall.nix, wireguard.nix — used to verify rule-ordering and backend claims.
+
+This fork has been through ~10 prior audit rounds; most classes (secrets argv, symlink privesc, macaroon minting TOCTOU, netns-exec, cookie chmod, RPC whitelist) are genuinely closed, with regression tests pinning each fix. Verified clean: no secrets in the store, sandboxed root services, `mv -fT`/run-as-read hardening in the macaroon script, hardened onion-addresses, owner-only netns-exec wrapper, scoped CVE whitelist, action-pinned workflows.
+
+## Highest-value investigation: the tip commit's assertions
+
+d5ac2b8 claims to close the "silent rule loss" class for the wireguard preset (its whole security model: lnd admin REST on 0.0.0.0 guarded only by iptables `extraCommands`). The two new assertions cover `networking.firewall.enable = false`, `networking.nftables.enable`, and `services.firewalld.enable`. However, nixpkgs 26.05 exposes `networking.firewall.backend` (enum iptables/nftables/firewalld) as a first-class user option. Setting `backend = "firewalld"` evades every assertion; the iptables firewall unit (the only consumer of `extraCommands`) is gated on `backend == "iptables"` and never exists, and the backend option does not enable the firewalld service — nothing filters anything. Verified by direct evaluation (above). The `backend = "nftables"` variant fails closed only by accident (nixpkgs' own `extraCommands == ""` assertion), not by the preset's design.
+
+Secondary targets checked and clean: nbxplorer WorkingDirectory/content-root fix (test-pinned), lnd `wants`-vs-`requires`, `lndconnect-wg` flag plumbing (PATH-resolves the hiPrio wrapper; REST port matches the accept rule), wgConnect secrets ownership, setup-secrets sandbox (CAP set, ReadWritePaths, AF_UNIX-only), netns matrix, RPC whitelist contents vs. the documented safety bar, release-tag closure filter.
+
+## Findings
+
+```json
+[
+  {
+    "id": "FW-1",
+    "title": "Wireguard preset firewall-backend assertions miss networking.firewall.backend = \"firewalld\": all preset rules silently vanish and no firewall runs at all",
+    "severity": "medium",
+    "confidence": "verified",
+    "component": "modules/presets/wireguard.nix",
+    "location": "assertions block, lines ~88-107; interacts with networking.firewall.extraCommands rules (lines ~178-205)",
+    "description": "The preset's security model is its iptables extraCommands: an accept rule admitting lnd REST (bound to 0.0.0.0 by the preset) only from the single wg peer, and restrictPeer REJECT rules. The tip commit d5ac2b8 added assertions rejecting three silent-loss paths: firewall disabled, networking.nftables.enable, services.firewalld.enable. It misses the fourth: in the pinned nixpkgs 26.05, networking.firewall.backend is a user-settable enum (iptables|nftables|firewalld). With backend = \"firewalld\" (and the firewalld service not separately enabled): all three preset assertions pass (networking.firewall.enable is true; networking.nftables.enable and services.firewalld.enable are both false); firewall-iptables.nix is gated on backend == \"iptables\" so the firewall unit that runs extraCommands never exists; firewall-firewalld.nix neither enables services.firewalld nor asserts anything about extraCommands. Verified by evaluation with the fork's own modules at the pinned nixpkgs: failedAssertions = [], firewallUnitExists = false, firewalldUnitExists = false, lndRestAddress = \"0.0.0.0\", extraCommands defined but consumed by no unit. The node boots with zero firewalling while every assertion reads green: lnd's macaroon-admin REST API listens unfiltered on 0.0.0.0:8080 (the fork itself treats unauthenticated/reachable macaroon-admin REST as critical-class exposure, cf. the btcpayserver 2.4.2 incident), and the peer-restriction REJECT rules vanish. The same docstring-level option (backend = \"nftables\") currently fails closed only via nixpkgs' own extraCommands assertion (firewall-nftables.nix), an accident the preset does not control. Note the assertion's own message says \"Keep the iptables backend\" — but no assertion checks the backend.",
+    "impact": "With a one-line, legitimate-looking user config (backend = \"firewalld\"), the exact scenario the assertion block exists to make impossible ships: no firewall at all, lnd admin REST exposed on all interfaces behind macaroon auth only, peer restriction gone. Requires owner misconfiguration to trigger (not attacker-controlled), but the module explicitly promises to refuse evaluation rather than ship an unguarded admin API, and this commit claims to have closed exactly this class.",
+    "recommendation": "Extend the backend assertion to require the iptables backend itself, with a fallback for nixpkgs versions lacking the option: assertion = ((config.networking.firewall.backend or \"iptables\") == \"iptables\") && !(config.networking.nftables.enable || (config.services.firewalld.enable or false));. This makes the nftables and firewalld backend paths fail loudly by design instead of relying on nixpkgs' incidental extraCommands assertion. Add a VM/eval test that the backend=\"firewalld\" configuration fails to evaluate.",
+    "status": "open"
+  },
+  {
+    "id": "FW-2",
+    "title": "wireguard-lndconnect VM test asserts only positive reachability; no negative test that the firewall rules actually restrict",
+    "severity": "low",
+    "confidence": "verified",
+    "component": "test/wireguard-lndconnect.nix",
+    "location": "testScript, both subtests",
+    "description": "The two-node test asserts the client can ping 10.10.0.1 and reach lnd REST through the wg tunnel. It never asserts that REST is unreachable before wg-quick up (or from a non-peer source), nor that the peer cannot reach non-admitted ports/addresses via the tunnel (restrictPeer REJECT). CI's own comment in test.yml states the firewall rules are the preset's whole security model and are release-gated — but the gate only proves the accept rule is not too narrow, not that it is not too broad, and never exercises the REJECT rules at all. A regression that drops the -s/-i scoping from the accept rule, or deletes the restrictPeer inserts, passes CI unchanged. Compounding: FW-1 shows the assertions are not airtight either, so the test is the real gate.",
+    "impact": "Silent regression of the preset's only security controls would not be caught before release.",
+    "recommendation": "In the existing two-node test, add two negative assertions: (1) before wg-quick up, client.fail('curl ... https://<server-external-ip>:8080/...') or an equivalent reachability probe; (2) after wg-quick up, client.fail to reach a second, deliberately-open-but-non-REST port on a non-wg server address (exercising the REJECT), e.g. allow a TCP port via allowedTCPPorts and assert the peer still cannot hit it through the tunnel.",
+    "status": "open"
+  },
+  {
+    "id": "FW-3",
+    "title": "Stale FORWARD REJECT rule persists after the wireguard preset is removed from the configuration",
+    "severity": "informational",
+    "confidence": "medium",
+    "component": "modules/presets/wireguard.nix",
+    "location": "networking.firewall.extraStopCommands (restrictPeer block)",
+    "description": "The restrictPeer rules are inserted with -I FORWARD 1, outside the nixos-fw chain the firewall service flushes and rebuilds on each (re)start. Removal relies on extraStopCommands. On a switch that drops the preset, the firewall unit is stopped using the NEW unit definition (no extraStopCommands), so the manually-inserted FORWARD rule survives until reboot. The stale rule rejects forwarded packets sourced 10.10.0.2 not destined 10.10.0.1. After preset removal nothing legitimately sources that address, so practical impact is limited to a colliding LAN device or a spoofed source. Upstream-inherited limitation of the extraCommands pattern.",
+    "impact": "Residual, confusing egress filter after disabling the preset; no exposure gain.",
+    "recommendation": "Make the stop command self-contained: change the start side to also record/cleanup on stop is already attempted; simplest robust fix is to have extraStopCommands delete the rule by position-independent spec guarded with '|| :' (already done) AND accept the reboot caveat in the module comment, or move the FORWARD insert into a dedicated chain with a flush on both start and stop. Low priority; document if not fixed.",
+    "status": "open (informational)"
+  },
+  {
+    "id": "FW-4",
+    "title": "netns-exec capability-drop behavior is untested for the fork's service set",
+    "severity": "informational",
+    "confidence": "verified",
+    "component": "test/tests.py",
+    "location": "netns-isolation test block (joinmarket-guarded assertion)",
+    "description": "The only test asserting that netns-exec drops capabilities before exec (runuser -u operator -- netns-exec nb-joinmarket capsh --print | grep Current) is gated on 'joinmarket' in enabled_tests; joinmarket was removed in the fork trim, and nb-joinmarket is no longer in netns-exec's allowlist (main.c lists nb-bitcoind, nb-lnd, nb-electrs, nb-nbxplorer, nb-btcpayserver). The cap-drop path of this cap_sys_admin wrapper now has zero coverage for every namespace it can actually enter. The wrapper remains owner-only (0500 operator:root), so the operator (root-equivalent) is the only caller; this is defense-in-depth coverage, not an exposure.",
+    "impact": "A regression in drop_capabilities()/exec ordering in pkgs/netns-exec would ship unnoticed; blast radius bounded by the operator-equivalence trust model.",
+    "recommendation": "Repoint the existing assertion at a live allowlisted namespace, e.g. runuser -u operator -- netns-exec nb-lnd capsh --print | grep -E '^Current: =$', and un-gate it from joinmarket. One-line change in the netns scenario.",
+    "status": "open (informational)"
+  },
+  {
+    "id": "FW-5",
+    "title": "Known and deliberately deferred: lnd admin REST binds 0.0.0.0 under the wireguard preset, guarded by the firewall alone",
+    "severity": "low",
+    "confidence": "verified",
+    "component": "modules/presets/wireguard.nix",
+    "location": "services.lnd.restAddress = \"0.0.0.0\" (mkIf lndconnect); docs/wireguard-rest-bind.md",
+    "description": "Listed for completeness; already tracked in-repo. The preset binds lnd's macaroon-admin REST API to all interfaces and relies solely on the nixos-fw accept rule scoped to -i wg-nb -s <peer>/32. The rebind to the wg address is DEFERRED with a documented breakage checklist (nbLib.address consumers, cert SANs, startup coupling). Not a new finding, but its risk posture is now worse than the deferral assumed: until FW-1 is fixed, the \"firewall must be enabled and iptables-backed\" invariant is not actually enforced for the firewalld-backend path, and until FW-2 is fixed, the scoping of the accept rule is untested.",
+    "impact": "Defense-in-depth gap acknowledged by the maintainers; conditional on FW-1/FW-2 for exploitation paths.",
+    "recommendation": "Keep the deferral, but land FW-1 and FW-2 first; the pre-flight checklist in docs/wireguard-rest-bind.md remains the right gate for the rebind itself.",
+    "status": "known/deferred (documented in docs/wireguard-rest-bind.md)"
+  },
+  {
+    "id": "FW-6",
+    "title": "Known and documented: getpeerinfo/getnodeaddresses retained in the public bitcoind RPC whitelist",
+    "severity": "low",
+    "confidence": "verified",
+    "component": "modules/bitcoind-rpc-public-whitelist.nix",
+    "location": "Network section",
+    "description": "Listed for completeness; already documented in the file header and the audit resolution log. These two calls leak peer topology, but the 'public' RPC user is also lnd/nbxplorer's local backend user and requires both calls (lnd chain-backend health check and pruned block fetching); removing them takes lnd down. The leak only matters if a user exposes the public RPC user through a proxy to untrusted parties.",
+    "impact": "Conditional peer-topology disclosure only when the public user is deliberately exposed.",
+    "recommendation": "None beyond the documented guidance: narrow rpcwhitelist in your own config when exposing the public user over a proxy. Optionally add an assertion in a future release that fails evaluation when rpc.address is non-local and the whitelist still contains these calls.",
+    "status": "known/documented (in-file note + resolution log)"
+  }
+]
+```
+
+**Bottom line:** the fork's audit trail is real and the closures hold, with one exception: the tip commit's own claim ("firewalld silently drops the rules → assert on it") is incomplete for the direct `networking.firewall.backend` option in the pinned nixpkgs — FW-1, verified end-to-end. FW-2 is the cheapest high-value follow-up since the test is the only thing that actually pins the rule semantics. FW-3/FW-4 are hygiene; FW-5/FW-6 are already tracked in-repo and listed so the findings array is honest about the full state.

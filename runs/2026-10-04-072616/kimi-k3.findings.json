@@ -1,0 +1,32 @@
+[
+  {
+    "id": "F1",
+    "severity": "medium-low",
+    "title": "helper/fetch-release: GPG verification decoupled from the consumed artifact",
+    "file": "helper/fetch-release:50",
+    "description": "The script verifies the release nar-hash with the one-argument form `gpg --verify nar-hash.txt.asc`. gpg then picks the verification mode from the packet structure: for a non-detached (inline/cleartext) signature it verifies the payload embedded in the .asc and never reads nar-hash.txt, exiting 0 while printing only a warning, which `&> /dev/null` hides. The script then emits the unverified contents of nar-hash.txt as a 'verified' fetchTarball pin. Reproduced empirically on this machine: an inline-signed message of unrelated content plus an attacker-written nar-hash.txt yields exit 0; upstream's two-argument form correctly exits 2. This is exactly the bug upstream fort-nix fixed in da27f27 ('fetch-release: fix signature verification!', 2026-08-31) after the fork point (37931e5, 2026-08-13); the fork edited this file for its NIX_BITCOIN_FETCH_UPSTREAM guard but kept the broken primitive. Exploitation requires the victim to set NIX_BITCOIN_FETCH_UPSTREAM=1 and an attacker who can write release assets on the archived fort-nix repo plus any inline/cleartext-signed artifact from the release key; impact is a user pinning a malicious tarball with a 'verified' label.",
+    "evidence": "gpg 2.x PoC: one-arg verify of inline-signed .asc with hostile sibling nar-hash.txt -> exit 0; two-arg -> exit 2",
+    "remediation": "Use `gpg --verify nar-hash.txt.asc nar-hash.txt` (port upstream da27f27) and drop the `&> /dev/null` so gpg's 'not a detached signature' warning is visible. Alternatively delete the helper entirely, since SECURITY.md already disowns it.",
+    "line": 0
+  },
+  {
+    "id": "F2",
+    "severity": "low",
+    "title": "SECURITY.md claims fork commits are SSH-signed; all 72 fork commits are unsigned",
+    "file": "SECURITY.md (Release Integrity)",
+    "description": "The doc states 'Commits on this fork are signed with the maintainer's SSH key. GitHub shows them as Verified' and instructs users to run `git verify-commit`. In the audited history, every pre-fork upstream commit carries a signature (%G? = E, present but unverifiable here) while every fork commit from b9b03f9 (2026-08-14) through HEAD d5ac2b8 carries none (%G? = N). The CalVer release tags are annotated but unsigned per the doc itself, so the entire documented chain of custody above flake.lock narHash pinning does not exist: a GitHub account compromise force-pushing master/release would be indistinguishable from genuine history via the documented verification method. The narHash-pinning advice in the same section is sound and is the real protection; the false signing claim trains users to expect 'Verified' badges that are absent.",
+    "evidence": "git log --format=%G?: 133 signed (all <= 37931e5, upstream), 72 unsigned (all fork commits); git verify-commit HEAD -> 'No signature'",
+    "remediation": "Enable SSH commit signing for the maintainer (and consider signing release tags), or correct SECURITY.md to state that commits are unsigned and that commit-hash + narHash pinning is the only integrity mechanism.",
+    "line": 0
+  },
+  {
+    "id": "F3",
+    "severity": "informational",
+    "title": "WireGuard preset binds lnd admin REST API to 0.0.0.0; protection is iptables-only",
+    "file": "modules/presets/wireguard.nix:211",
+    "description": "With services.lnd.lndconnect enabled under the wireguard preset, lnd's macaroon-admin REST listener binds to all interfaces. Exposure is contained by the nixos-fw default-drop plus a single interface-and-source-pinned accept rule, and the fork added eval-time assertions refusing to build with the firewall disabled or a non-iptables backend (nftables/firewalld), which closes the silent-failure modes. The residual risk (any local process can reach the admin API; a firewall misconfiguration outside these two checks exposes it) is acknowledged by the maintainers with a written remediation checklist in docs/wireguard-rest-bind.md. Reported for completeness; the deferred rebind to the wg server address remains the correct end state.",
+    "evidence": "services.lnd.restAddress = \"0.0.0.0\" with comment citing docs/wireguard-rest-bind.md; assertions at lines 107-122",
+    "remediation": "Work through docs/wireguard-rest-bind.md (systemd ordering vs wireguard-wg-nb, TLS SAN via certificate.extraIPs, ExecStartPost/btcpayserver/lndconnect consumers) and bind REST to the wg server address.",
+    "line": 0
+  }
+]
