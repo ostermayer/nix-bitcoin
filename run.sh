@@ -120,7 +120,10 @@ for i in "${!MODELS[@]}"; do
           --tmpfs "$HOME" \
           --ro-bind "$HOME/.local" "$HOME/.local" \
           --bind "$HOME/.codex" "$HOME/.codex" \
-          --ro-bind "$SRC" "$SRC" \
+          # The checkout stays read-only for real: writes land in a tmp overlay
+        # (pi's codebase-index extension wants to write .codebase-index/ into
+        # the cwd and aborted the run on a plain ro-bind, 2026-10-04).
+        --overlay-src "$SRC" --tmp-overlay "$SRC" \
           --chdir "$SRC" \
           -- codex exec -m "$mid" -c "model_reasoning_effort=$think" -c 'web_search="disabled"' \
                -s read-only --ephemeral --skip-git-repo-check --color never \
@@ -153,7 +156,8 @@ for i in "${!MODELS[@]}"; do
         --ro-bind / / --dev /dev --proc /proc --bind /tmp /tmp --unshare-pid \
         --tmpfs "$HOME" \
         --ro-bind "$HOME/.npm-global" "$HOME/.npm-global" \
-        --ro-bind "$SRC" "$SRC" \
+        --ro-bind "$HOME/.nvm" "$HOME/.nvm" \
+        --overlay-src "$SRC" --tmp-overlay "$SRC" \
         --overlay-src "$HOME/.pi/agent" --tmp-overlay "$HOME/.pi/agent" \
         --chdir "$SRC" \
         -- pi -p --provider "$prov" --model "$mid:$think" --tools "$TOOLS" \
