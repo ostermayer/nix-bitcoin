@@ -1,0 +1,52 @@
+[
+  {
+    "id": "F1",
+    "severity": "low",
+    "title": "Inline bitcoind RPC passwordHMAC values are written to the world-readable Nix store",
+    "location": "modules/bitcoind.nix (configFile = builtins.toFile ...)",
+    "detail": "rpc.users.<name>.passwordHMAC set inline (the option's own example shows this) is interpolated into builtins.toFile \"bitcoin.conf\", a world-readable /nix/store path. An rpcauth salt$HMAC pair is offline brute-force material against the RPC password for any local user. Default-generated users (privileged/public/btcpayserver) are unaffected: they use passwordHMACFromFile and the HMACs stay in the 0700 secrets dir.",
+    "recommendation": "Add a warning to the passwordHMAC option description, or route all HMACs through nix-bitcoin.secrets like the FromFile path.",
+    "file": "modules/bitcoind.nix (configFile = builtins.toFile ...)",
+    "line": 0
+  },
+  {
+    "id": "F2",
+    "severity": "low",
+    "title": "lnd macaroon ExecStartPost runs as fully unsandboxed root (systemd '+' prefix) against daemon-controlled output",
+    "location": "pkgs/lib.nix (rootScript), modules/lnd.nix ExecStartPost",
+    "detail": "nbLib.rootScript prefixes the command with '+', which disables all systemd sandboxing (User, ProtectSystem, IPAddressDeny, ...). The script then makes an authenticated HTTPS request to lnd's REST API and parses the response (jq/xxd) as unsandboxed root. The threat actor in the documented model is lnd itself, and the response is capped at 64 KiB and must be valid JSON with a .macaroon field, so the residual risk is a memory-safety bug in curl's TLS or jq parsing, reachable by a compromised lnd.",
+    "recommendation": "Replace '+' with a dedicated helper unit running with only the caps it needs (CAP_DAC_READ_SEARCH for the macaroon read can be avoided entirely by reading as the lnd user, which the script already does), keeping defaultHardening applied.",
+    "file": "pkgs/lib.nix (rootScript), modules/lnd.nix ExecStartPost",
+    "line": 0
+  },
+  {
+    "id": "F3",
+    "severity": "low",
+    "title": "nodeinfo exec()s Python built by unescaped Nix string interpolation",
+    "location": "modules/nodeinfo.nix (mkInfoLong / add_service exec)",
+    "detail": "Service config values (e.g. services.*.address) are spliced verbatim into Python source that is exec'd by the invoking user. A value containing quotes/newlines breaks out of the string literal and injects Python. No privilege boundary is crossed (only the config author, already root-equivalent, controls these values), but a stray quote in an address also silently breaks nodeinfo output.",
+    "recommendation": "Interpolate via json.dumps-equivalent escaping (builtins.toJSON) instead of raw string splicing.",
+    "file": "modules/nodeinfo.nix (mkInfoLong / add_service exec)",
+    "line": 0
+  },
+  {
+    "id": "F4",
+    "severity": "low",
+    "title": "Demo QEMU SSH forward binds 0.0.0.0 with a repo-published private key",
+    "location": "examples/qemu-vm/run-vm.sh (QEMU_NET_OPTS hostfwd=tcp::PORT-:22), examples/qemu-vm/id-vm",
+    "detail": "An empty host part in QEMU's hostfwd binds all interfaces, so while deploy-krops.sh / run-vm.sh demos run, the VM's SSH (root login authorized for the committed id-vm keypair) is reachable from the LAN, not just localhost. The deploy script warns users to replace the key, but the listen address itself should be loopback. Demo-scoped: the VM holds only freshly generated demo secrets.",
+    "recommendation": "Use hostfwd=tcp:127.0.0.1:${sshPort}-:22.",
+    "file": "examples/qemu-vm/run-vm.sh (QEMU_NET_OPTS hostfwd=tcp::PORT-:22), examples/qemu-vm/id-vm",
+    "line": 0
+  },
+  {
+    "id": "F5",
+    "severity": "low",
+    "title": "Predictable /tmp paths trusted by dev/test scripts on multi-user machines",
+    "location": "examples/qemu-vm/run-vm.sh (tmpDir=/tmp/nix-bitcoin-qemu-vm, mkdir -p), test/lib/copy-src.sh (/tmp/nix-bitcoin-src cache)",
+    "detail": "run-vm.sh places the SSH ControlMaster socket and the VM disk image under a fixed /tmp path without an ownership check; a local user who precreates the dir owns both. copy-src.sh moves a pre-existing /tmp/nix-bitcoin-src into a fresh mktemp dir and rsyncs the real source over it with default size+mtime quick-check, so a preplanted file with matching size and mtime survives --delete and is then executed as the developer via run-tests.sh.",
+    "recommendation": "Always mktemp -d (no fixed name, no cache reuse), or verify ownership/mode of the cache dir before trusting it.",
+    "file": "examples/qemu-vm/run-vm.sh (tmpDir=/tmp/nix-bitcoin-qemu-vm, mkdir -p), test/lib/copy-src.sh (/tmp/nix-bitcoin-src cache)",
+    "line": 0
+  }
+]

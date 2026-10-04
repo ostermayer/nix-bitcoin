@@ -1,0 +1,76 @@
+Coverage is complete. Here's the audit report.
+
+## Surface map
+
+Fork of fort-nix/nix-bitcoin (upstream archived at v0.0.139), trimmed to bitcoind, lnd (+ lndinit, lndconnect), electrs, btcpayserver + nbxplorer, plus infra modules (secrets, operator, onion services/addresses, netns-isolation, nodeinfo, backups, presets, deployment). Fork-specific high-value targets, all investigated in depth:
+
+- **modules/presets/wireguard.nix** — the fork's riskiest module (admin REST on 0.0.0.0, firewall-only security model, iptables rules, wg-connect QR generation)
+- **modules/secrets/secrets.nix** — root secret generation and permissioning service
+- **modules/lnd.nix** — root ExecStartPost macaroon minting (symlink race surface, repeatedly audited)
+- **modules/bitcoind-rpc-public-whitelist.nix + bitcoind.nix** — RPC privilege model, `.cookie` group read
+- **pkgs/netns-exec/src/main.c + netns-isolation.nix** — cap_sys_admin wrapper and namespace policy
+- **helper/fetch-release, update-flake.sh/nix, update-nix-bitcoin, makeShell.nix** — pin supply chain
+- **.github/workflows/cve-scan.yml, release-tag.yml, test.yml + cve-whitelist.toml** — CI integrity
+- **pkgs/overrides.nix + btcpayserver/ copy, nbxplorer, lndinit, krops, nixpkgs-pinned** — version overrides and fetch pinning
+- modules/btcpayserver.nix, electrs.nix, onion-addresses/services, nodeinfo, backups, operator, security, presets, deployment, examples, dev, test suite
+
+## What was verified
+
+This fork carries an unusual density of prior adversarial audits (2026-08-14 through 2026-10-04, multi-model, with closure commits). I verified the claimed closures rather than re-trusting them:
+
+- lnd macaroon path: root-only staging dir on the same tmpfs, atomic `mv -fT`, admin.macaroon read as the lnd user, 64 KiB response cap, `jq -ce ... | strings` validation, umask empirically confirmed 0640. Sound.
+- onion-addresses: symlink-refusing reads, single-read TOCTOU closure via strict v3-onion content validation, root-built dirs chowned last, `chown -h`. Sound.
+- netns-exec: absolute-path `execv`, cap return checks, exec-failure exit, whitelist matches shipped netns. Sound.
+- wireguard preset: firewall-enable and effective-backend assertions cover both silent rule-loss paths; REST accept is interface-and-peer-scoped (cryptokey-routed, so source spoofing is excluded); restrictPeer REJECT inserted at chain top so it precedes standard accepts. Sound.
+- fetch-release: gated by value on `NIX_BITCOIN_FETCH_UPSTREAM=1`, gpg verify bound to the data file, fingerprint pinned. Sound.
+- cve-scan: fails closed on bad exit codes, non-JSON, malformed entries, non-numeric counts. Sound.
+- All source fetches hash-pinned (flake.lock narHash, fetchFromGitHub hashes, fetchgit commit pin for krops, pinned rpcauth.py). No secrets in the store; conf files with credentials are datadir copies at 0600/0640.
+
+Residual exposures are documented and consciously accepted in-repo: the wireguard REST 0.0.0.0 bind (tracked in docs/wireguard-rest-bind.md with a pre-flight checklist), the `.cookie` 0640 group read (bitcoind.nix L-10 note), operator's doas-as-lnd power (design).
+
+## Findings
+
+Two upstream-inherited lows worth recording, plus two tracked in-repo items for completeness. No new medium or high findings.
+
+```json
+[
+  {
+    "id": "NB-2026-10-04-01",
+    "severity": "low",
+    "component": "modules/presets/wireguard.nix",
+    "title": "wg-connect host autodetection trusts plaintext external-IP echo providers",
+    "detail": "When nix-bitcoin-wg-connect is run without a host argument, it derives the node's external address by running lndconnect, which queries third-party IP-echo providers over plaintext HTTP (go-external-ip). The response's host field is spliced into the generated WireGuard QR config's Endpoint line without validation. A network MITM or malicious echo provider can control the Endpoint shown to the operator's phone. Impact is bounded: sed extraction is single-line (no config injection into the phone profile is possible), and WireGuard authenticates the server by the pinned public key in the same QR, so an attacker cannot terminate or decrypt the tunnel. Worst case is pairing-time redirection (a UDP relay preserves end-to-end crypto), DoS, or pairing correlation.",
+    "status": "open (upstream-inherited, unchanged by the fork)",
+    "recommendation": "Validate the extracted host against an IP/hostname regex and fail otherwise, or drop the autodetection and require an explicit host argument in the docs."
+  },
+  {
+    "id": "NB-2026-10-04-02",
+    "severity": "informational",
+    "component": "examples/qemu-vm/id-vm, examples/qemu-vm/vm-config.nix",
+    "title": "Committed demo SSH identity authorizes root on example VM configs",
+    "detail": "The repository ships a private SSH key (id-vm) whose public half is added to root's authorized_keys by examples/qemu-vm/vm-config.nix. The key is public to anyone with repo access, so any node whose config imports vm-config.nix accepts root logins by anyone. It is a demo/QA profile (fresh offline VM), and deploy-qemu-vm.sh explicitly warns to replace the identity for serious use. Upstream-inherited.",
+    "status": "open (documented, demo-only)",
+    "recommendation": "Acceptable as-is; optionally generate the identity per-clone at first run instead of committing it."
+  },
+  {
+    "id": "NB-2026-10-04-03",
+    "severity": "informational (advisory, medium if the firewall is bypassed by user config)",
+    "component": "modules/presets/wireguard.nix",
+    "title": "lnd admin REST API remains bound to 0.0.0.0 under the wireguard preset, guarded only by iptables",
+    "detail": "With lndconnect enabled, the preset binds the macaroon-admin REST API to all interfaces. Its protection is the nixos-fw accept rule scoped to -i wg-nb and the single cryptokey-routed peer, plus the new assertions refusing firewall-off and non-iptables backends. Defense-in-depth via a second restlisten on the wg address is deferred with a documented breakage checklist (docs/wireguard-rest-bind.md).",
+    "status": "tracked/deferred in-repo (docs/wireguard-rest-bind.md)",
+    "recommendation": "No action this audit; implement the recommended extraConfig second-listener variant from the deferral doc."
+  },
+  {
+    "id": "NB-2026-10-04-04",
+    "severity": "informational (accepted)",
+    "component": "modules/bitcoind.nix",
+    "title": "bitcoind RPC cookie is group-readable by bitcoin (operator gets full privileged RPC)",
+    "detail": "postStart sets the .cookie file to 0640 bitcoin:bitcoin; every member of group bitcoin holds full privileged RPC. Current membership is exactly the operator (by design, for bitcoin-cli), and the module carries an explicit warning comment (audit L-10).",
+    "status": "accepted in-repo (documented at the code site)",
+    "recommendation": "Keep group membership minimal; consider a dedicated macaroon-style credential for operator bitcoin-cli if the operator account should be deprivileged."
+  }
+]
+```
+
+Bottom line: at commit 8dd96504668cb2f887b27cf2469ea10ea9c7029c the fork's own code is in strong shape. Every high-value target I attacked held up, the prior audits' closure claims checked out where verifiable by reading, and the only reportable items are a bounded low in upstream-inherited pairing UX plus known, tracked advisories.

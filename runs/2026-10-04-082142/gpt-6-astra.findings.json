@@ -1,0 +1,18 @@
+[
+  {
+    "id": "short-slug",
+    "title": "one line",
+    "severity": "critical|high|medium|low|info",
+    "category": "secrets-in-store|file-perms|rpc-whitelist|sandboxing|privesc|ordering|activation-script|network-exposure|netns|secrets-lifecycle|availability|privacy|default-creds|config-injection|supply-chain|other",
+    "component": "module or file area",
+    "file": "modules/foo.nix",
+    "line": 123,
+    "evidence": "the exact quoted code",
+    "precondition": "what must already be true (e.g. 'none', 'lnd RCE', 'LAN access', 'operator compromised') and how strong that assumption is",
+    "attack_scenario": "attacker, starting tier, steps, payoff",
+    "impact": "which attacker goal (funds/rce/secrets/privacy/dos); for dos, say downtime vs data loss",
+    "confidence": 0.0,
+    "false_positive_risk": "the single strongest counter-argument",
+    "recommendation": "the fix"
+  }
+]
