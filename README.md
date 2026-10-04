@@ -88,7 +88,7 @@ running nix-bitcoin does not require any previous experience with the Nix ecosys
 Get started
 ---
 - See the [examples](examples/README.md) for an overview of all features.
-- To setup a new node from scratch, see the [installation instructions](docs/install.md).
+- To set up a new node from scratch, see the [installation instructions](docs/install.md).
 - To add nix-bitcoin to an existing NixOS configuration, see [importable-configuration.nix](examples/importable-configuration.nix)
   and the [Flake example](examples/flakes/flake.nix).
 
@@ -105,6 +105,7 @@ top left corner of the documents.
 * [Configuration and maintenance](docs/configuration.md)
 * [Using services](docs/services.md)
 * [FAQ](docs/faq.md)
+* [Weekly release process](docs/release-process.md) (maintainers)
 
 Features
 ---
@@ -142,7 +143,8 @@ Note that if the machine you're deploying *from* is insecure, there is nothing n
 
 Developing
 ---
-See [dev/README](./dev/README.md).
+See the [development guide](./dev/README.md). Maintainers should also follow the
+[weekly release process](docs/release-process.md).
 
 Troubleshooting
 ---

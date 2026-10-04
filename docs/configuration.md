@@ -1,8 +1,10 @@
-# Managing your deployment
+# Configuration and maintenance
+
+## Managing your deployment
 
 This section applies to users of the deployment method described in the [installation guide](./install.md).
 
-## Deployment shell
+### Deployment shell
 Run command `nix-shell` in your deployment directory.\
 You now have access to deployment commands:
 
@@ -13,17 +15,18 @@ You now have access to deployment commands:
 - `h`, `help`\
   Show help
 
-## Updating nix-bitcoin
+### Updating nix-bitcoin
 Run `update-nix-bitcoin` from the deployment shell.\
 This resolves the fork's latest `release` tag to its commit, prefetches that
 commit's tarball hash and rewrites `nix-bitcoin-release.nix`. Review the diff
 of the pinned commit before deploying — tags are unsigned pointers, commits
-are signed (see `SECURITY.md`). Flake users: `nix flake update nix-bitcoin`
-against `github:ostermayer/nix-bitcoin/release` instead.
+are signed (see the [security policy](../SECURITY.md)). Flake users run
+`nix flake update nix-bitcoin` against
+`github:ostermayer/nix-bitcoin/release` instead.
 
-# Customizing your configuration
+## Customizing your configuration
 
-## Get started with Nix
+### Get started with Nix
 
 See [Nix - A One Pager](https://github.com/tazjin/nix-1p) for a short guide
 to Nix, the language used in `configuration.nix`.\
@@ -32,7 +35,7 @@ evaluate Nix expressions.
 
 For a general introduction to the Nix and NixOS ecosystem, see [nix.dev](https://nix.dev/).
 
-## Set options
+### Set options
 
 All features and services are configurable through options. You can find a list of
 supported options at the top of each nix-bitcoin [module](../modules/modules.nix)
@@ -54,7 +57,7 @@ networking.hostName = "myhost";
 time.timeZone = "UTC";
 ```
 
-## Debug your configuration
+### Debug your configuration
 
 To print the values of specific options of your config, add the following to your `configuration.nix`:
 ```nix
@@ -67,9 +70,9 @@ in lib.traceSeqN 3 debugVal [];
 ```
 and run command `eval-config` from the deployment shell.
 
-# Allowing external connections to services
+## Allowing external connections to services
 
-## Allow peer connections to bitcoind
+### Allow peer connections to bitcoind
 
 ```nix
 services.bitcoind = {
@@ -95,55 +98,55 @@ services.bitcoind = {
 networking.firewall.allowedTCPPorts = [ config.services.bitcoind.port ];
 ```
 
-## Allow bitcoind RPC connections from LAN
+### Allow bitcoind RPC connections from a LAN
 
-> **Warning.** This example opens the RPC listener wide. `rpc.address =
-> "0.0.0.0"` binds every interface, and `"0.0.0.0/0"` in `rpc.allowip` allows
-> every source address. The firewall is then the only limit on who can reach
-> the RPC port. Scope both to your LAN: bind the LAN interface address and list
-> only your LAN subnet in `allowip`. The public RPC whitelist restricts which
-> methods a caller may use; it does not restrict who can connect.
+> **Warning:** Bitcoin RPC is an administrative interface. Bind it only to a
+> trusted LAN address, restrict callers to the smallest possible subnet, and
+> scope the firewall rule to that interface. The public RPC whitelist limits
+> methods; it does not authenticate the network client or replace a firewall.
 
 ```nix
 services.bitcoind = {
-  # Listen to RPC connections on all interfaces
-  rpc.address = "0.0.0.0";
+  # Replace this with the node's address on the trusted LAN.
+  rpc.address = "192.168.50.10";
 
-  # Allow RPC connections from external addresses
+  # Prefer a single client address when possible.
   rpc.allowip = [
-    "10.10.0.0/24" # Allow a subnet
-    "10.50.0.3" # Allow a specific address
-    "0.0.0.0/0" # Allow all addresses
+    "192.168.50.20"
   ];
 
   # Set this if you're using the `secure-node.nix` template
   tor.enforce = false;
 };
 
-# Open the RPC port in the firewall
-networking.firewall.allowedTCPPorts = [ config.services.bitcoind.rpc.port ];
+# Replace enp3s0 with the trusted LAN interface.
+networking.firewall.interfaces.enp3s0.allowedTCPPorts = [
+  config.services.bitcoind.rpc.port
+];
 ```
 
-## Allow connections to electrs
+### Allow connections to electrs
 
 ```nix
 services.electrs = {
-  # Listen to connections on all interfaces
-  address = "0.0.0.0";
+  # Replace this with the node's address on the trusted LAN.
+  address = "192.168.50.10";
 
   # Set this if you're using the `secure-node.nix` template
   tor.enforce = false;
 };
 
-# Open the electrs port in the firewall
-networking.firewall.allowedTCPPorts = [ config.services.electrs.port ];
+# Replace enp3s0 with the trusted LAN interface.
+networking.firewall.interfaces.enp3s0.allowedTCPPorts = [
+  config.services.electrs.port
+];
 ```
 
 You can use the same approach to allow connections to other services.
 
-# Migrate existing services to nix-bitcoin
+## Migrate existing services to nix-bitcoin
 
-## Example: bitcoind
+### Example: bitcoind
 
 ```shell
 # 1. Stop bitcoind on your node
@@ -168,7 +171,8 @@ Some services require extra steps:
 
 - lnd
 
-  Copy your wallet password to `$secretsDir/lnd-wallet-password` (See: [Secrets dir](#secrets-dir)).
+  Copy your wallet password to `$secretsDir/lnd-wallet-password` (see the
+  [secrets directory](#secrets-directory)).
 
 - btcpayserver
 
@@ -177,10 +181,10 @@ Some services require extra steps:
   # Export (on the other node)
   sudo -u postgres pg_dump YOUR_BTCPAYSERVER_DB > export.sql
   # Restore (on the nix-bitcoin node)
-  sudo -u postgres psql btcpaydb < export.sql
+  doas -u postgres psql btcpaydb < export.sql
   ```
 
-# Use bitcoind from another node
+## Use bitcoind from another node
 
 Here's how to use a bitcoind instance running on another node within a nix-bitcoin config:
 
@@ -199,7 +203,7 @@ services.bitcoind = {
   # Search for `whitelistedPort` in this repo to see the affected services.
   # If you're using one of these services, either add a whitelisted p2p port
   # on your remote node via `whitebind` and set it here:
-  whitelistedPort = <remote whitebind RPC port>;
+  whitelistedPort = <remote whitebind P2P port>;
   #
   # Or use the default p2p port and add `whitelist=<address of this node>` to
   # your remote bitcoind config:
@@ -220,9 +224,9 @@ services.bitcoind = {
 For each service that connects to bitcoind and has option
 `services.<service>.tor.enforce` enabled (either explicitly or by importing
 `secure-node.nix` or `enable-tor.nix`), you need to
-allow the remote bitcoind connection:
+allow the remote bitcoind connection. For example, for lnd:
 ```nix
-systemd.services.<service>.serviceConfig.IPAddressAllow = [ ${services.bitcoind.rpc.address} ];
+systemd.services.lnd.serviceConfig.IPAddressAllow = [ "10.10.0.2" ];
 ```
 
 > The above configuration is only required if the remote bitcoind **is
@@ -237,11 +241,11 @@ $secretsDir/bitcoin-rpcpassword-public
 ## Only needed when set in the above config snippet
 # $secretsDir/bitcoin-rpcpassword-btcpayserver
 ```
-See: [Secrets dir](#secrets-dir)
+See the [secrets directory](#secrets-directory).
 
 Afterwards, restart `bitcoind`: `systemctl restart bitcoind`.
 
-# Temporarily disable a service
+## Temporarily disable a service
 
 Sometimes you might want to disable a service without removing the service user and
 integration with other services, as it would happen when setting
@@ -254,11 +258,11 @@ systemd.services.<service>.wantedBy = mkForce [];
 This way, the systemd service still exists, but is not automatically started.\
 Note: This only works for services that are not required by other active services.
 
-# Appendix
+## Appendix
 
-## Secrets dir
+### Secrets directory
 
-The secrets dir is set by option `nix-bitoin.secretsDir` and has the
+The secrets directory is set by option `nix-bitcoin.secretsDir` and has the
 following default values:
 
 - If you're using the krops deployment method: `/var/src/secrets`

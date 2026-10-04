@@ -53,19 +53,24 @@ not maintain stable branches.
 
 ## Security Tracker
 
-Known findings and their status are tracked in
-[docs/security-audit-2026-08-14.md](docs/security-audit-2026-08-14.md). The
-audit is re-run on every nixpkgs pin update.
+Current review results and their raw evidence are published on the
+[`audits` branch](https://github.com/ostermayer/nix-bitcoin/tree/audits).
+The [2026-08-14 security audit](docs/security-audit-2026-08-14.md) is retained
+as a historical baseline; it is not the current tracker. The adversarial review
+is re-run for every release candidate and after every release-relevant fix.
 
 ## Adversarial review
 
-Beyond CI's NixOS VM assertion suite, every change is reviewed by two
-independent open-weight models (Kimi K3 + GLM-5.2) acting as adversarial
-security auditors, at max reasoning. The **methodology, the audit tooling, and
-the full results of every run** live on the [`audits`](../../tree/audits)
-branch — kept off `master`/`release` so the code you pin stays clean. Browse it
-to follow the reviews, read the raw transcripts, or run the suite yourself;
-PRs to improve the audit prompt are welcome.
+Beyond CI's NixOS VM assertion suite, every release-relevant change is reviewed
+by two independent open-weight models—Kimi K3 and GLM-5.3—through `pi`, at
+maximum reasoning. Both are mandatory; a configured third-model second opinion
+can aid human triage but does not replace either primary review. The
+**methodology, audit tooling, exact prompt, and full results of every run** live
+on the [`audits` branch](https://github.com/ostermayer/nix-bitcoin/tree/audits),
+kept off `master` and `release` so the source users pin stays clean. Findings
+are advisory input to human review: maintainers verify each one, fix or
+explicitly accept it, and rerun the complete review after a release-relevant
+change. See the [weekly release process](docs/release-process.md) for the gate.
 
 ## Release Integrity
 
@@ -90,3 +95,7 @@ this fork. It fetches upstream fort-nix releases and references the original
 maintainer's GPG key. It refuses to run unless `NIX_BITCOIN_FETCH_UPSTREAM=1`
 is set, and it points at the flake pin instead. Do not rely on it. This fork
 releases through CalVer tags on the `release` branch (`release-tag.yml`).
+
+Maintainers must follow the [weekly release process](docs/release-process.md),
+including signed commits, K3 + GLM-5.3 review of the exact promoted commit,
+release-gating VM tests, fleet evaluation, and fast-forward-only promotion.
