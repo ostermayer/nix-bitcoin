@@ -108,12 +108,16 @@ in {
       # without an error, so the REST accept rule and the restrictPeer REJECT
       # simply vanish. Refuse to evaluate rather than ship an unguarded admin API.
       {
-        assertion = !lndconnect || config.networking.firewall.enable;
-        message = "nix-bitcoin wireguard preset: services.lnd.lndconnect binds the admin REST API to 0.0.0.0 and relies on networking.firewall — enable the firewall.";
+        # restrictPeer is also only an iptables REJECT: with the firewall off it
+        # evaluates fine and installs nothing (audit second opinion 2026-10-01).
+        assertion = !(lndconnect || cfg.restrictPeer) || config.networking.firewall.enable;
+        message = "nix-bitcoin wireguard preset: services.lnd.lndconnect binds the admin REST API to 0.0.0.0 and `restrictPeer` is an iptables REJECT; both rely on networking.firewall — enable the firewall.";
       }
       {
-        assertion = !config.networking.nftables.enable;
-        message = "nix-bitcoin wireguard preset: its rules are iptables `extraCommands`, which the nftables backend silently drops (networking.nftables.enable = true). Keep the iptables backend or port the rules.";
+        # firewalld replaces the iptables backend the same way nftables does
+        # (audit second opinion 2026-10-01).
+        assertion = !(config.networking.nftables.enable || (config.services.firewalld.enable or false));
+        message = "nix-bitcoin wireguard preset: its rules are iptables `extraCommands`, which the nftables backend (networking.nftables.enable) and firewalld (services.firewalld.enable) silently drop. Keep the iptables backend or port the rules.";
       }
     ];
 
