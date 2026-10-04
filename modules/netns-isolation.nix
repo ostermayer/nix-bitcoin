@@ -1,4 +1,4 @@
-{ config, lib, pkgs, ... }:
+{ config, lib, pkgs, ... }@args:
 
 with lib;
 let
@@ -94,6 +94,13 @@ let
   iptables = "${config.networking.firewall.package}/bin/iptables";
 
   bridgeIp = "169.254.${toString cfg.addressblock}.10";
+
+  # See the i2pd note in ./bitcoind.nix: nixpkgs after 26.05 has `settings`
+  # instead of `proto.*`.
+  i2pdHasSettings = args.options.services.i2pd ? settings;
+  i2pSamPort =
+    if i2pdHasSettings then config.services.i2pd.settings.sam.port or 7656
+    else config.services.i2pd.proto.sam.port;
 in {
   inherit options;
 
@@ -108,10 +115,12 @@ in {
       port = 9050;
       IsolateDestAddr = true;
     };
-    services.i2pd.proto.sam.address = bridgeIp;
+    services.i2pd =
+      if i2pdHasSettings then { settings.sam.address = bridgeIp; }
+      else { proto.sam.address = bridgeIp; };
     networking.firewall.interfaces.nb-br.allowedTCPPorts = [
       config.services.tor.client.socksListenAddress.port
-      config.services.i2pd.proto.sam.port
+      i2pSamPort
     ];
     boot.kernel.sysctl."net.ipv4.ip_forward" = true;
 

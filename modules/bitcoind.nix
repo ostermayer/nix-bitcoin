@@ -1,4 +1,4 @@
-{ config, pkgs, lib, ... }:
+{ config, pkgs, lib, ... }@args:
 
 with lib;
 let
@@ -289,7 +289,16 @@ let
   nbLib = config.nix-bitcoin.lib;
   secretsDir = config.nix-bitcoin.secretsDir;
 
-  i2pSAM = config.services.i2pd.proto.sam;
+  # nixpkgs after 26.05 replaced the i2pd `proto.*` options with the freeform
+  # `settings` option (no `proto` aliases), and the module system resolves the
+  # `proto` path even under `mkIf false`. Pick the option set that exists.
+  i2pdHasSettings = args.options.services.i2pd ? settings;
+  i2pSAM =
+    if i2pdHasSettings then {
+      address = config.services.i2pd.settings.sam.address or "127.0.0.1";
+      port = config.services.i2pd.settings.sam.port or 7656;
+    } else
+      config.services.i2pd.proto.sam;
 
   configFile = builtins.toFile "bitcoin.conf" ''
     # We're already logging via journald
@@ -378,10 +387,13 @@ in {
       }
     ];
 
-    services.i2pd = mkIf (cfg.i2p != false) {
+    services.i2pd = mkIf (cfg.i2p != false) ({
       enable = true;
+    } // (if i2pdHasSettings then {
+      settings.sam.enabled = true;
+    } else {
       proto.sam.enable = true;
-    };
+    }));
 
     systemd.tmpfiles.rules = [
       "d '${cfg.dataDir}' 0770 ${cfg.user} ${cfg.group} - -"
