@@ -63,3 +63,5 @@
 - attack: null
 - fix: Repoint the existing assertion at a live allowlisted namespace, e.g. runuser -u operator -- netns-exec nb-lnd capsh --print | grep -E '^Current: =$', and un-gate it from joinmarket. One-line change in the netns scenario.
 
+
+> Second opinion by gpt-6-astra (codex, thinking=xhigh): **ok** — see `second-opinion.gpt-6-astra.md`.

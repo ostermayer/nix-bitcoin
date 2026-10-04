@@ -1,0 +1,86 @@
+{
+  "reviews": [
+    {
+      "id": "F1",
+      "verdict": "confirmed",
+      "severity": "medium",
+      "reasoning": "helper/fetch-release:49 verifies only `nar-hash.txt.asc`, while line 59 independently consumes `nar-hash.txt`. An inline signature can therefore authenticate different bytes; the upstream opt-in guard limits exposure but does not repair verification.",
+      "fix_ok": false,
+      "fix_note": "No recommendation supplied. Use `gpg --verify nar-hash.txt.asc nar-hash.txt` to bind verification to the consumed file."
+    },
+    {
+      "id": "F2",
+      "verdict": "false-positive",
+      "severity": "info",
+      "reasoning": "All 72 commits in `37931e5..HEAD` contain `gpgsig -----BEGIN SSH SIGNATURE-----`; all 72 signatures verified cryptographically against their embedded keys. SSH commit signatures are the existing control; verifying signer identity additionally requires independently trusted allowed-signers configuration.",
+      "fix_ok": false,
+      "fix_note": "No recommendation supplied; changing SECURITY.md to claim these commits are unsigned would be incorrect."
+    },
+    {
+      "id": "F3",
+      "verdict": "confirmed",
+      "severity": "info",
+      "reasoning": "modules/presets/wireguard.nix:211 sets `restAddress = \"0.0.0.0\"`, and line 179 scopes the firewall allowance to the WireGuard interface and peer. However, the claimed backend containment is incomplete because of FW-1; network reachability also does not bypass lnd's TLS and macaroon authentication.",
+      "fix_ok": false,
+      "fix_note": "No explicit recommendation supplied. A bare rebind is incomplete; the documented additional listener and startup-ordering approach preserves internal consumers."
+    },
+    {
+      "id": "FW-1",
+      "verdict": "confirmed",
+      "severity": "medium",
+      "reasoning": "The assertion at modules/presets/wireguard.nix:119 checks enable flags, not `networking.firewall.backend`. Read-only evaluation against the pinned nixpkgs reproduced zero failed assertions, neither firewall unit, and REST bound to 0.0.0.0 with backend=\"firewalld\"; macaroon authentication remains, so this is not unauthenticated administrative access.",
+      "fix_ok": true,
+      "fix_note": ""
+    },
+    {
+      "id": "FW-2",
+      "verdict": "confirmed",
+      "severity": "low",
+      "reasoning": "test/wireguard-lndconnect.nix:55-78 only establishes the tunnel, pings the server, and makes an authenticated REST request. Neither external denial nor either restrictPeer REJECT rule is tested.",
+      "fix_ok": false,
+      "fix_note": "Ensure listeners are ready and failures measure TCP reachability rather than TLS/authentication errors. Explicitly route the forbidden destination through WireGuard; the generated AllowedIPs covers only its subnet, and a second server-address test exercises INPUT, not the separate FORWARD rule."
+    },
+    {
+      "id": "FW-3",
+      "verdict": "confirmed",
+      "severity": "low",
+      "reasoning": "modules/presets/wireguard.nix:189 inserts directly into FORWARD, with deletion supplied only by `extraStopCommands` at line 196. The pinned firewall uses `reloadIfChanged = true` and executes the new configuration's cleanup during reload, so removing the preset loses that deletion; the report's claim about stopping with the new definition misstates the mechanism.",
+      "fix_ok": false,
+      "fix_note": "Repeating the existing deletion or adding a chain does not ensure cleanup after its defining configuration disappears. Use lifecycle-managed cleanup that retains the old rule specification; documentation alone only acknowledges the defect."
+    },
+    {
+      "id": "FW-4",
+      "verdict": "confirmed",
+      "severity": "info",
+      "reasoning": "test/tests.py:270 gates the capability assertion on the removed joinmarket test and targets disallowed `nb-joinmarket`. The wrapper currently checks capability-drop failure before `execv`, but this test never exercises that successful execution path.",
+      "fix_ok": false,
+      "fix_note": "The proposed bare `capsh` command is rejected by main.c:62, which requires an absolute path. Supply an absolute capsh executable and select a namespace enabled in the scenario; observing capabilities after exec alone also does not prove the explicit pre-exec drop ran."
+    },
+    {
+      "id": "FW-5",
+      "verdict": "confirmed",
+      "severity": "info",
+      "reasoning": "This duplicates F3: modules/presets/wireguard.nix:211 enables the wildcard listener, and docs/wireguard-rest-bind.md explicitly defers changing it. FW-1 compromises network filtering, while FW-2 identifies missing regression coverage rather than an independent exploit.",
+      "fix_ok": true,
+      "fix_note": "The sequencing and documented rebind checklist are appropriate; implement FW-2 with the corrections above."
+    },
+    {
+      "id": "FW-6",
+      "verdict": "confirmed",
+      "severity": "info",
+      "reasoning": "modules/bitcoind-rpc-public-whitelist.nix:57-58 includes both methods, and its header explicitly acknowledges topology disclosure and local-service dependence. The default RPC bind and source allowlist are loopback, so the reported disclosure requires granting untrusted callers access.",
+      "fix_ok": false,
+      "fix_note": "Narrowing the shared backend user's required methods can break lnd. Expose a separate restricted RPC user or enforce a proxy method allowlist; a non-loopback-address assertion would also misclassify legitimate namespace deployments."
+    }
+  ],
+  "missed": [
+    {
+      "file": "helper/fetch-release",
+      "line": 17,
+      "severity": "low",
+      "title": "Upstream opt-in checks presence rather than value",
+      "description": "`[[ ! -v NIX_BITCOIN_FETCH_UPSTREAM ]]` permits fetching when the variable is empty or set to 0, despite the documented requirement to set it to 1. Compare its value explicitly with 1 so configurations intended to disable upstream fetching actually refuse it."
+    }
+  ],
+  "summary": "Eight reports describe real conditions or coverage gaps, with F3 and FW-5 duplicating one advisory; F2 is false-positive. Prioritize the firewall-backend assertion and legacy signature verification, and correct the incomplete test and cleanup recommendations. Inspection and evaluation were read-only; no VM tests were run."
+}
