@@ -114,10 +114,12 @@ in {
         message = "nix-bitcoin wireguard preset: services.lnd.lndconnect binds the admin REST API to 0.0.0.0 and `restrictPeer` is an iptables REJECT; both rely on networking.firewall — enable the firewall.";
       }
       {
-        # firewalld replaces the iptables backend the same way nftables does
-        # (audit second opinion 2026-10-01).
-        assertion = !(config.networking.nftables.enable || (config.services.firewalld.enable or false));
-        message = "nix-bitcoin wireguard preset: its rules are iptables `extraCommands`, which the nftables backend (networking.nftables.enable) and firewalld (services.firewalld.enable) silently drop. Keep the iptables backend or port the rules.";
+        # Check the effective backend, not the enable flags that feed its
+        # default: `networking.firewall.backend` can also be set directly, and
+        # both the nftables and the firewalld backends drop `extraCommands`
+        # without an error (audits 2026-10-01 and 2026-10-04).
+        assertion = (config.networking.firewall.backend or "iptables") == "iptables";
+        message = "nix-bitcoin wireguard preset: its rules are iptables `extraCommands`, which the nftables and firewalld backends silently drop (networking.firewall.backend = \"${config.networking.firewall.backend or "iptables"}\"). Keep the iptables backend or port the rules.";
       }
     ];
 

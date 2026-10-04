@@ -14,7 +14,7 @@ repo=fort-nix/nix-bitcoin
 # Consume this fork via its flake pin instead:
 #   inputs.nix-bitcoin.url = "github:ostermayer/nix-bitcoin/release";
 # Refuse to run unless explicitly overridden.
-if [[ ! -v NIX_BITCOIN_FETCH_UPSTREAM ]]; then
+if [[ ${NIX_BITCOIN_FETCH_UPSTREAM:-} != 1 ]]; then
     echo "This is a fork of nix-bitcoin; pin the flake, don't fetch releases:" >&2
     echo "  inputs.nix-bitcoin.url = \"github:ostermayer/nix-bitcoin/release\";" >&2
     echo "This helper fetches UPSTREAM ($repo) releases, WITHOUT the fork's fixes." >&2
@@ -46,7 +46,7 @@ curl -fsS -L -O "$baseUrl/nar-hash.txt"
 curl -fsS -L -O "$baseUrl/nar-hash.txt.asc"
 
 # Verify signature for nar-hash
-gpg --verify nar-hash.txt.asc &> /dev/null || {
+gpg --verify nar-hash.txt.asc nar-hash.txt &> /dev/null || {
     >&2 echo "Error: Signature verification failed. Please open an issue in the project repository."
     exit 1
 }

@@ -267,12 +267,12 @@ def _():
         "Permission denied",
     )
 
-    if "joinmarket" in enabled_tests:
-        # netns-exec should drop capabilities
-        assert_matches(
-            "runuser -u operator -- netns-exec nb-joinmarket capsh --print | grep Current",
-            re.compile("^Current: =$", re.MULTILINE),
-        )
+    # netns-exec should drop capabilities. nb-bitcoind is always present in a
+    # netns scenario; netns-exec requires an absolute command path.
+    assert_matches(
+        "runuser -u operator -- netns-exec nb-bitcoind $(command -v capsh) --print | grep Current",
+        re.compile("^Current: =$", re.MULTILINE),
+    )
 
 
 # Impure: stops bitcoind (and dependent services)
