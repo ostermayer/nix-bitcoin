@@ -106,6 +106,10 @@ for i in "${!MODELS[@]}"; do
   raw="$OUT/$m.raw.txt"; fj="$OUT/$m.findings.json"
   log "=== $m ($prov, thinking=$think) ==="
   if [ "$prov" = codex ]; then
+    # Both sandboxes mount the throwaway checkout as a tmp overlay, not a plain
+    # read-only bind: pi's codebase-index extension writes .codebase-index/
+    # into the cwd and aborted every run with ENOENT (2026-10-04). The real
+    # clone stays untouched; the writes vanish with the run.
     # Codex CLI backend. Same bwrap allowlist as the pi path, plus ~/.local
     # (the codex symlink) read-only and ~/.codex read-write: codex refreshes
     # its ChatGPT OAuth tokens in place, and a discarded refresh would strand
@@ -120,10 +124,7 @@ for i in "${!MODELS[@]}"; do
           --tmpfs "$HOME" \
           --ro-bind "$HOME/.local" "$HOME/.local" \
           --bind "$HOME/.codex" "$HOME/.codex" \
-          # The checkout stays read-only for real: writes land in a tmp overlay
-        # (pi's codebase-index extension wants to write .codebase-index/ into
-        # the cwd and aborted the run on a plain ro-bind, 2026-10-04).
-        --overlay-src "$SRC" --tmp-overlay "$SRC" \
+          --overlay-src "$SRC" --tmp-overlay "$SRC" \
           --chdir "$SRC" \
           -- codex exec -m "$mid" -c "model_reasoning_effort=$think" -c 'web_search="disabled"' \
                -s read-only --ephemeral --skip-git-repo-check --color never \
