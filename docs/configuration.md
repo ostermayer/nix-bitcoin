@@ -100,19 +100,21 @@ networking.firewall.allowedTCPPorts = [ config.services.bitcoind.port ];
 
 ### Allow bitcoind RPC connections from a LAN
 
-> **Warning:** Bitcoin RPC is an administrative interface. Bind it only to a
-> trusted LAN address, restrict callers to the smallest possible subnet, and
-> scope the firewall rule to that interface. The public RPC whitelist limits
-> methods; it does not authenticate the network client or replace a firewall.
+> **Warning:** Bitcoin RPC is an administrative interface. `rpc.address =
+> "0.0.0.0"` binds every interface. The node's own services (lnd, electrs,
+> nbxplorer) connect to `127.0.0.1`, so do not bind only a LAN address: that
+> locks them out. Limit callers with `rpc.allowip` and scope the firewall rule
+> to the LAN interface. The public RPC whitelist limits methods; it does not
+> authenticate the network client and it does not replace a firewall.
 
 ```nix
 services.bitcoind = {
-  # Replace this with the node's address on the trusted LAN.
-  rpc.address = "192.168.50.10";
+  # Listen on all interfaces (the node's own services use 127.0.0.1)
+  rpc.address = "0.0.0.0";
 
-  # Prefer a single client address when possible.
+  # Allow only the trusted LAN. Prefer a single client address when possible.
   rpc.allowip = [
-    "192.168.50.20"
+    "192.168.50.0/24"
   ];
 
   # Set this if you're using the `secure-node.nix` template
@@ -129,8 +131,8 @@ networking.firewall.interfaces.enp3s0.allowedTCPPorts = [
 
 ```nix
 services.electrs = {
-  # Replace this with the node's address on the trusted LAN.
-  address = "192.168.50.10";
+  # Listen on all interfaces; the firewall rule below limits access to the LAN.
+  address = "0.0.0.0";
 
   # Set this if you're using the `secure-node.nix` template
   tor.enforce = false;
@@ -181,7 +183,7 @@ Some services require extra steps:
   # Export (on the other node)
   sudo -u postgres pg_dump YOUR_BTCPAYSERVER_DB > export.sql
   # Restore (on the nix-bitcoin node)
-  doas -u postgres psql btcpaydb < export.sql
+  sudo -u postgres psql btcpaydb < export.sql  # `doas` on a secure-node config
   ```
 
 ## Use bitcoind from another node

@@ -137,11 +137,34 @@ examples below.
     }
     ```
 
-    `nixos-generate-config` normally detects the filesystems and UEFI boot mode.
-    Review both generated files. For legacy BIOS, set
-    `boot.loader.grub.device = "/dev/sda";` in `configuration.nix`. Do not edit
-    generated hardware settings unless you have verified that detection was
-    wrong.
+    Open `hardware-configuration.nix`:
+
+    ```
+    nano /mnt/etc/nixos/hardware-configuration.nix
+    ```
+
+    Add one of the following lines inside the configuration block. The
+    nix-bitcoin deployment copies only `hardware-configuration.nix` to the
+    target machine. Set the boot loader in this file, not in
+    `configuration.nix`.
+
+    **Option 1**: UEFI
+
+    ```
+      boot.loader.systemd-boot.enable = true;
+    ```
+
+    **Option 2**: Legacy Boot (MBR)
+
+    ```
+      boot.loader.grub.device = "/dev/sda";
+    ```
+
+    In rare cases the generated file has no `fileSystems` option. Add it:
+
+    ```
+      fileSystems."/".device = "/dev/disk/by-label/nixos";
+    ```
 
 6. Do the installation
 
