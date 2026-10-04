@@ -67,3 +67,5 @@
 - attack: attacker, starting tier, steps, payoff
 - fix: the fix
 
+
+> Second opinion by gpt-6-astra (codex, thinking=xhigh): **ok** — see `second-opinion.gpt-6-astra.md`.
