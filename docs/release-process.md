@@ -48,7 +48,12 @@ The final command must succeed. If it does not, merge `origin/release` into
 `master`, review the merge carefully, and restart this process from the merged
 commit. Do not repair divergence by rewriting published history.
 
-Create a dated candidate branch:
+The weekly candidate is created by the `fork-autotest` timer on the build box
+(Mondays, 03:30 local time). One run updates the flake inputs, refuses an lnd
+downgrade, runs the local VM suite, evaluates the three fleet closures, and
+pushes the signed branch `auto/pins-<date>`. It then sends the e-mail
+"CANDIDATE READY". Review that branch. Create a candidate by hand only when
+the timer did not run or failed:
 
 ```bash
 date=YYYY-MM-DD
@@ -58,7 +63,7 @@ update-flake.sh
 ```
 
 `update-flake.sh` updates the flake inputs and regenerates `pkgs/pinned.nix`.
-Review both the lock-file revisions and the package movements it reports:
+In both cases, review the lock-file revisions and the package movements:
 
 ```bash
 git diff -- flake.nix flake.lock pkgs/pinned.nix
@@ -122,11 +127,13 @@ at maximum reasoning and publishes the prompt, raw transcripts, and structured
 findings:
 
 ```bash
-./run.sh "$candidate" kimi-k3:max glm-5p3:max
+./run.sh "$candidate" kimi-k3:max glm-5p3:max codex/gpt-6-astra:xhigh
 ```
 
-Do not substitute one model for the other. A configured third-model second
-opinion may help triage, but it does not replace either primary review.
+Do not substitute one model for the other. The third model (GPT-6 Astra) is
+a second opinion: it helps triage, but it does not replace either primary
+review. The harness publishes its result as a separate "second opinion"
+commit on the `audits` branch.
 
 Read both raw transcripts as well as `report.md`; the merged count alone is not
 enough. For each finding, record one of:
@@ -203,10 +210,18 @@ Verify the public result:
 
 ## 6. Roll out and monitor
 
-Update one staging or canary node first. Confirm service health, logs, sync
-progress, peer connectivity, Lightning channel state, Electrum queries, BTCPay
-checkout behavior, backups, and nodeinfo output as applicable. Then roll the
-same locked revision through the fleet.
+Rehearse every release on the throwaway staging node before the fleet. Run
+`staging-rehearsal.sh rehearse <tag>` from the fleet repository
+(`configs/staging/`); it provisions the node, deploys the tag, and reports
+service health. Do not skip the rehearsal for an lnd update or for an update
+that changes a database version or a state format.
+
+Then update the fleet in order: the watchtowers first, the production node
+last. After each update confirm service health, logs, sync progress, peer
+connectivity, Lightning channel state, Electrum queries, BTCPay checkout
+behavior, backups, and nodeinfo output. Confirm that the lnd REST onion
+address and the macaroons are unchanged: wallets connected over lndconnect
+(Zeus) must keep working. Roll the same locked revision through the fleet.
 
 For a regression, stop the rollout and fix forward through this process. An
 individual deployment may temporarily restore its previous `flake.lock`, but
