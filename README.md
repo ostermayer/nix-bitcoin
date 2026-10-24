@@ -16,21 +16,22 @@
 </p>
 <br/>
 
-> ### Maintained fork
+> ### This fork is frozen
 >
-> This is an **independently maintained fork** of
-> [fort-nix/nix-bitcoin](https://github.com/fort-nix/nix-bitcoin), which reached
-> **end of life** at `v0.0.139` (2026-08): the upstream repo is archived and
-> receives no further updates or security fixes. Because nix-bitcoin pins its
-> **entire nixpkgs** (kernel, sshd, tor, openssl, …), that freeze would strand
-> security updates for anyone still on it — so this fork continues maintenance.
+> I moved my work to [bitcoinix/bitcoinix](https://github.com/bitcoinix/bitcoinix),
+> the community continuation of nix-bitcoin, and my own fleet runs it now. This
+> repository gets no further updates or security fixes, so don't pin it.
 >
-> It is **trimmed to a subset of upstream's services** (see below) and is driven
-> by the maintainer's own production fleet. It is offered in good faith and
-> **without warranty**; review it yourself before trusting funds to it. Not
-> affiliated with or endorsed by the original nix-bitcoin developers — do not
-> send them reports or donations on this fork's behalf (see
-> [SECURITY.md](SECURITY.md)).
+> bitcoinix keeps the module API and the `nix-bitcoin.*` option namespace, so the
+> switch is a change of the flake input:
+>
+> ```nix
+> nix-bitcoin.url = "github:bitcoinix/bitcoinix";
+> ```
+>
+> Set `nix-bitcoin.configVersion` after the switch and read the migration notes in
+> bitcoinix's `modules/versioning.nix`. The hardening from this fork that isn't in
+> bitcoinix yet is in its open pull requests #48 and #63.
 
 nix-bitcoin is a collection of Nix packages and NixOS modules for easily installing **full-featured Bitcoin nodes** with an emphasis on **security**.
 
